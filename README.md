@@ -62,8 +62,8 @@ Install a release by using the firmware update in the InfinAssistant Bridge app,
 
 | Component | Version | Release |
 |-----------|---------|---------|
-| Firmware (InfiniTime fork) | 2.4.105 | [2.4.105](https://github.com/ryan-werts/infinassistant-firmware/releases/tag/2.4.105) |
-| Android app (InfinAssistant Bridge) | 2.1.127 | [2.1.127](https://github.com/ryan-werts/infinassistant-bridge/releases/tag/2.1.127) |
+| Firmware (based on InfiniTime) | 2.4.105 | [2.4.105](https://github.com/ryan-werts/infinassistant-firmware/releases/tag/2.4.105) |
+| Android app (InfinAssistant Bridge) | 2.1.128 | [2.1.128](https://github.com/ryan-werts/infinassistant-bridge/releases/tag/2.1.128) |
 | Home Assistant integration | 0.3.5 | [0.3.5](https://github.com/ryan-werts/infinassistant-ha/releases/tag/0.3.5) |
 
 **Breaking pairs.** These pairs must be upgraded together:

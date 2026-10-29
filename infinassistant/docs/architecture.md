@@ -17,7 +17,7 @@ InfinAssistant Bridge connects a [PineTime](https://pine64.org/devices/pinetime/
 
 | Repository | Contents |
 |------------|----------|
-| [`ryan-werts/infinassistant-firmware`](https://github.com/ryan-werts/infinassistant-firmware) | Watch firmware (InfiniTime fork with the InfinAssistant overlay). This overview and the protocol specification are in `infinassistant/docs/`. |
+| [`ryan-werts/infinassistant-firmware`](https://github.com/ryan-werts/infinassistant-firmware) | Watch firmware (based on InfiniTime, with the InfinAssistant overlay). This overview and the protocol specification are in `infinassistant/docs/`. |
 | [`ryan-werts/infinassistant-bridge`](https://github.com/ryan-werts/infinassistant-bridge) | Android companion app, InfinAssistant Bridge. |
 | [`ryan-werts/infinassistant-ha`](https://github.com/ryan-werts/infinassistant-ha) | Home Assistant integration and its Lovelace card. |
 
