@@ -1,0 +1,221 @@
+diff --git a/src/components/brightness/BrightnessController.h b/src/components/brightness/BrightnessController.h
+index 650749a..5e0cdb6 100644
+--- a/src/components/brightness/BrightnessController.h
++++ b/src/components/brightness/BrightnessController.h
+@@ -9,7 +9,10 @@ namespace Pinetime {
+   namespace Controllers {
+     class BrightnessController {
+     public:
+-      enum class Levels { Off, AlwaysOn, Low, Medium, High };
++      // Button is a stored setting only (Settings brightness, code 5 in the HELLO): High after a
++      // side-button wake, Low after any other. DisplayApp::ApplyBrightness resolves it to Low or
++      // High before anything reaches Set(), so the backlight never runs at Button.
++      enum class Levels { Off, AlwaysOn, Low, Medium, High, Button };
+       void Init();
+ 
+       void Set(Levels level);
+diff --git a/src/displayapp/DisplayApp.cpp b/src/displayapp/DisplayApp.cpp
+index e50ee19..123999d 100644
+--- a/src/displayapp/DisplayApp.cpp
++++ b/src/displayapp/DisplayApp.cpp
+@@ -38,6 +38,7 @@
+ #include "drivers/St7789.h"
+ #include "drivers/Watchdog.h"
+ #include "systemtask/SystemTask.h"
++#include "ha_bridge/BrightnessRules.h"
+ #include "systemtask/Messages.h"
+ 
+ #include "displayapp/screens/settings/QuickSettings.h"
+@@ -866,10 +867,9 @@ void DisplayApp::Register(Pinetime::Applications::HaBridge::BridgeController* br
+ }
+ 
+ void DisplayApp::ApplyBrightness() {
+-  auto brightness = settingsController.GetBrightness();
+-  if (brightness != Controllers::BrightnessController::Levels::Low && brightness != Controllers::BrightnessController::Levels::Medium &&
+-      brightness != Controllers::BrightnessController::Levels::High) {
+-    brightness = Controllers::BrightnessController::Levels::High;
+-  }
++  // ha_bridge/BrightnessRules.h: B is High after a side-button wake and Low after any other, and a
++  // stored level this firmware does not offer reads as High. Button never reaches the backlight.
++  auto brightness = Pinetime::Applications::HaBridge::ResolveBrightness(settingsController.GetBrightness(),
++                                                                       systemTask != nullptr && systemTask->IsButtonWake());
+   brightnessController.Set(brightness);
+ }
+diff --git a/src/displayapp/DisplayApp.h b/src/displayapp/DisplayApp.h
+index bdd6483..5d90eb5 100644
+--- a/src/displayapp/DisplayApp.h
++++ b/src/displayapp/DisplayApp.h
+@@ -84,6 +84,10 @@ namespace Pinetime {
+ 
+       void SetFullRefresh(FullRefreshDirections direction);
+ 
++      // Sets the backlight from the stored brightness setting; the Button setting becomes High
++      // after a side-button wake and Low after any other.
++      void ApplyBrightness();
++
+       void Register(Pinetime::System::SystemTask* systemTask);
+       void Register(Pinetime::Controllers::SimpleWeatherService* weatherService);
+       void Register(Pinetime::Controllers::MusicService* musicService);
+@@ -142,7 +146,6 @@ namespace Pinetime {
+       Apps nextApp = Apps::None;
+       DisplayApp::FullRefreshDirections nextDirection;
+       System::BootErrors bootError;
+-      void ApplyBrightness();
+ 
+       static constexpr size_t returnAppStackSize = 10;
+       Utility::StaticStack<Apps, returnAppStackSize> returnAppStack;
+diff --git a/src/displayapp/screens/settings/QuickSettings.cpp b/src/displayapp/screens/settings/QuickSettings.cpp
+index c5c3071..ff531a5 100644
+--- a/src/displayapp/screens/settings/QuickSettings.cpp
++++ b/src/displayapp/screens/settings/QuickSettings.cpp
+@@ -4,6 +4,7 @@
+ #include "displayapp/screens/BatteryIcon.h"
+ #include "components/ble/BleController.h"
+ #include "displayapp/InfiniTimeTheme.h"
++#include "ha_bridge/BrightnessRules.h"
+ 
+ using namespace Pinetime::Applications::Screens;
+ 
+@@ -70,8 +71,7 @@ QuickSettings::QuickSettings(Pinetime::Applications::DisplayApp* app,
+   lv_obj_align(btn1, nullptr, LV_ALIGN_IN_TOP_LEFT, buttonXOffset, barHeight);
+ 
+   btn1_lvl = lv_label_create(btn1, nullptr);
+-  lv_obj_set_style_local_text_font(btn1_lvl, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_sys_48);
+-  lv_label_set_text_static(btn1_lvl, brightness.GetIcon());
++  UpdateBrightnessLabel();
+ 
+   btn2 = lv_btn_create(lv_scr_act(), nullptr);
+   btn2->user_data = this;
+@@ -136,14 +136,39 @@ void QuickSettings::UpdateScreen() {
+   statusIcons.Update();
+ }
+ 
++void QuickSettings::UpdateBrightnessLabel() {
++  if (settingsController.GetBrightness() == Controllers::BrightnessController::Levels::Button) {
++    // The brightness icon with a B at its lower right. lv_font_sys_48 holds icons only, so the letter
++    // is a second label in a text font the build already links (declared for every screen by
++    // LV_FONT_CUSTOM_DECLARE in lv_conf.h). It is a child of the screen, not of the button, whose
++    // layout would stack it under the icon; a label is not clickable, so the button still gets the tap.
++    lv_obj_set_style_local_text_font(btn1_lvl, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_sys_48);
++    lv_label_set_text_static(btn1_lvl, Symbols::brightnessHigh);
++    if (btn1_b == nullptr) {
++      btn1_b = lv_label_create(lv_scr_act(), nullptr);
++      lv_obj_set_style_local_text_font(btn1_b, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &jetbrains_mono_bold_20);
++      lv_label_set_text_static(btn1_b, "B");
++    }
++    lv_obj_align(btn1_b, btn1, LV_ALIGN_IN_BOTTOM_RIGHT, -10, -6);
++  } else {
++    if (btn1_b != nullptr) {
++      lv_obj_del(btn1_b);
++      btn1_b = nullptr;
++    }
++    lv_obj_set_style_local_text_font(btn1_lvl, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, &lv_font_sys_48);
++    lv_label_set_text_static(btn1_lvl, brightness.GetIcon());
++  }
++}
++
+ void QuickSettings::OnButtonEvent(lv_obj_t* object) {
+   if (object == btn2) {
+     app->StartApp(Apps::FlashLight, DisplayApp::FullRefreshDirections::Up);
+   } else if (object == btn1) {
+ 
+-    brightness.Step();
+-    lv_label_set_text_static(btn1_lvl, brightness.GetIcon());
+-    settingsController.SetBrightness(brightness.Level());
++    // Low -> Medium -> High -> B -> Low, from the stored setting (ha_bridge/BrightnessRules.h).
++    settingsController.SetBrightness(Pinetime::Applications::HaBridge::NextBrightnessSetting(settingsController.GetBrightness()));
++    app->ApplyBrightness();
++    UpdateBrightnessLabel();
+ 
+   } else if (object == btn3) {
+ 
+diff --git a/src/displayapp/screens/settings/QuickSettings.h b/src/displayapp/screens/settings/QuickSettings.h
+index 87c126b..34dd785 100644
+--- a/src/displayapp/screens/settings/QuickSettings.h
++++ b/src/displayapp/screens/settings/QuickSettings.h
+@@ -33,6 +33,8 @@ namespace Pinetime {
+         void UpdateScreen();
+ 
+       private:
++        void UpdateBrightnessLabel();
++
+         DisplayApp* app;
+         Controllers::DateTime& dateTimeController;
+         Controllers::BrightnessController& brightness;
+@@ -46,6 +48,7 @@ namespace Pinetime {
+ 
+         lv_obj_t* btn1;
+         lv_obj_t* btn1_lvl;
++        lv_obj_t* btn1_b = nullptr; // the B beside the icon while the setting is B
+         lv_obj_t* btn2;
+         lv_obj_t* btn3;
+         lv_obj_t* btn3_lvl;
+diff --git a/src/systemtask/SystemTask.cpp b/src/systemtask/SystemTask.cpp
+index 06dccd5..f60b12d 100644
+--- a/src/systemtask/SystemTask.cpp
++++ b/src/systemtask/SystemTask.cpp
+@@ -363,7 +363,7 @@ void SystemTask::Work() {
+             // This is for faster wakeup, sacrificing special longpress and doubleclick handling while sleeping
+             if (IsSleeping()) {
+               fastWakeUpDone = true;
+-              GoToRunning();
++              GoToRunning(true);
+               break;
+             }
+           }
+@@ -428,6 +428,13 @@ void SystemTask::Work() {
+         case Messages::OnChargingEvent:
+           batteryController.ReadPowerState();
+           GoToRunning();
++#ifndef PINETIME_IS_RECOVERY
++          // A screen a notification woke is put to sleep early (HomeAssistantService); a plug or
++          // unplug that finds it on must not be cut short by that. It ends one that is armed and
++          // keeps a notification wake that lands just after it from arming another.
++          nimbleController.homeAssistant().SuspendEarlySleep(
++            Pinetime::Applications::HaBridge::NotifyWakeSleepWatch::kChargingWindowMs);
++#endif
+           break;
+         case Messages::MeasureBatteryTimerExpired:
+           batteryController.MeasureVoltage();
+@@ -474,10 +481,13 @@ void SystemTask::Work() {
+ #pragma clang diagnostic pop
+ }
+ 
+-void SystemTask::GoToRunning() {
++void SystemTask::GoToRunning(bool fromButton) {
+   if (state == SystemTaskState::Running) {
+     return;
+   }
++  // From here on this is a screen coming on, or a sleep being cancelled, and the cause is the
++  // caller's. Set before DisplayApp is told, which reads it to pick the brightness.
++  buttonWake = fromButton;
+   if (state == SystemTaskState::Sleeping || state == SystemTaskState::AODSleeping) {
+     // SPI only switched off when entering Sleeping, not AOD or GoingToSleep
+     if (state == SystemTaskState::Sleeping) {
+diff --git a/src/systemtask/SystemTask.h b/src/systemtask/SystemTask.h
+index b0101e6..a6cbec9 100644
+--- a/src/systemtask/SystemTask.h
++++ b/src/systemtask/SystemTask.h
+@@ -104,6 +104,12 @@ namespace Pinetime {
+         return state != SystemTaskState::Running;
+       }
+ 
++      // True when the screen's current wake came from the side button. Set by the fast-wake path,
++      // cleared by any other transition out of sleep, and left alone while already running.
++      bool IsButtonWake() const {
++        return buttonWake;
++      }
++
+     private:
+       TaskHandle_t taskHandle;
+ 
+@@ -148,7 +154,8 @@ namespace Pinetime {
+       void HandleButtonAction(Controllers::ButtonActions action);
+       bool fastWakeUpDone = false;
+ 
+-      void GoToRunning();
++      void GoToRunning(bool fromButton = false);
++      bool buttonWake = false;
+       void GoToSleep();
+       void UpdateMotion();
+       static constexpr TickType_t batteryMeasurementPeriod = pdMS_TO_TICKS(10 * 60 * 1000);

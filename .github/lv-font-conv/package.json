@@ -1,0 +1,9 @@
+{
+  "name": "infinassistant-firmware-font-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pins the font converter the firmware build runs, so the install is reproducible. Not part of the firmware.",
+  "dependencies": {
+    "lv_font_conv": "1.5.3"
+  }
+}

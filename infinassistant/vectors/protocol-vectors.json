@@ -1,0 +1,96 @@
+{
+  "format": 1,
+  "about": "Golden vectors for the InfinAssistant BLE protocol: one source for the firmware host tests (tools/fuzz), the app tests (android/core-data) and the Home Assistant tests (ha_integration/tests/test_protocol_compat.py). A hex field is a CBOR payload as bytes on the wire; a value is a plain number. Change a vector here and every side that pins it fails until it agrees. Not part of the firmware build (outside src/).",
+  "vectors": [
+    {
+      "name": "hello_features_word",
+      "description": "The HELLO feature word of firmware 2.4.103: 0x1FBFF, bits 0-9, 11-16 (bit 10 stays retired). A 32-bit CBOR unsigned int (5 bytes); the word was 0xFBFF (3 bytes) until 2.4.102.",
+      "hex": "1A 00 01 FB FF",
+      "value": 130047
+    },
+    {
+      "name": "hello_features_word_2_4_102",
+      "description": "The HELLO feature word of firmware 2.4.65 to 2.4.102 for comparison: 0xFBFF, no bit 16. An app that reads it must ask for a firmware update and send no CONFIG_PUSH.",
+      "hex": "19 FB FF",
+      "value": 64511
+    },
+    {
+      "name": "config_key_v2_bit",
+      "description": "Feature bit 16, CONFIG_KEY_V2: the CONFIG_PUSH decoder reads the key infinassistant. Firmware before 2.4.103 cannot set it.",
+      "value": 65536
+    },
+    {
+      "name": "hello_watch_2_4_103",
+      "description": "A hand-made sample of the watch HELLO of 2.4.103, laid out as BridgeController::HandleHello encodes it (the same 15 keys in the same order, definite-length map); it is not captured from the firmware and not produced by HandleHello. 224 bytes with these sample values (222 bytes before bit 16). The frame limit is 244.",
+      "hex": "AF 66 64 65 76 69 63 65 65 77 61 74 63 68 68 66 65 61 74 75 72 65 73 1A 00 01 FB FF 69 66 77 56 65 72 73 69 6F 6E 67 32 2E 34 2E 31 30 33 71 62 72 69 64 67 65 50 72 6F 74 6F 63 6F 6C 52 65 76 02 6C 68 65 6C 6C 6F 44 69 61 67 52 65 76 04 68 66 72 65 65 48 65 61 70 19 7A 02 6B 6D 69 6E 46 72 65 65 48 65 61 70 19 4E 84 6B 6D 61 6C 6C 6F 63 46 61 69 6C 73 00 6E 73 74 61 63 6B 4F 76 65 72 66 6C 6F 77 73 00 6B 75 70 74 69 6D 65 54 69 63 6B 73 1A 00 01 E2 40 70 6C 76 43 72 65 61 74 65 46 61 69 6C 75 72 65 73 00 6D 73 61 66 65 46 61 63 65 54 72 69 70 73 01 6D 6C 61 79 6F 75 74 52 65 66 75 73 65 64 02 71 6C 61 79 6F 75 74 57 72 69 74 65 46 61 69 6C 65 64 03 63 65 6E 63 F5"
+    },
+    {
+      "name": "config_push_v2",
+      "description": "CONFIG_PUSH as the app writes it: configVersion 1, the sensor reports on at 120 s under the key infinassistant, voice assist on. An indefinite-length map (BF ... FF); defaults are left out.",
+      "hex": "BF 6D 63 6F 6E 66 69 67 56 65 72 73 69 6F 6E 01 6E 69 6E 66 69 6E 61 73 73 69 73 74 61 6E 74 BF 67 65 6E 61 62 6C 65 64 F5 78 1B 73 65 6E 73 6F 72 52 65 70 6F 72 74 49 6E 74 65 72 76 61 6C 53 65 63 6F 6E 64 73 18 78 FF 6B 76 6F 69 63 65 41 73 73 69 73 74 F5 FF"
+    },
+    {
+      "name": "status_fingerprint",
+      "description": "DASHBOARD_STATE status fingerprint (FNV-1a 32-bit, offset 0x811C9DC5, prime 16777619): per group the glyph count as one byte, then each glyph symbol as one byte. The groups are listed in order.",
+      "value": 427976342,
+      "groups": [
+        "FSMDD",
+        "??",
+        "MDK",
+        "PKW",
+        "LHM?"
+      ]
+    },
+    {
+      "name": "notify_remove_nid7",
+      "description": "NOTIFY_REMOVE for nid 7, as the app writes it (indefinite-length map).",
+      "hex": "BF 63 6E 69 64 07 FF"
+    },
+    {
+      "name": "notify_remove_nid300",
+      "description": "NOTIFY_REMOVE for nid 300.",
+      "hex": "BF 63 6E 69 64 19 01 2C FF"
+    },
+    {
+      "name": "notify_dismiss_nid7",
+      "description": "NOTIFY_DISMISS for nid 7, as the watch writes it (definite-length map).",
+      "hex": "A1 63 6E 69 64 07"
+    },
+    {
+      "name": "notify_dismiss_nid42",
+      "description": "NOTIFY_DISMISS for nid 42.",
+      "hex": "A1 63 6E 69 64 18 2A"
+    },
+    {
+      "name": "notify_dismiss_nid65535",
+      "description": "NOTIFY_DISMISS for nid 65535, the largest.",
+      "hex": "A1 63 6E 69 64 19 FF FF"
+    },
+    {
+      "name": "notify_phone_nid7",
+      "description": "A phone NOTIFY (title Al, body Hi, tag 7, ts 1, nid 7) as the app writes it.",
+      "hex": "BF 65 74 69 74 6C 65 62 41 6C 64 62 6F 64 79 62 48 69 63 74 61 67 61 37 62 74 73 01 63 6E 69 64 07 FF"
+    },
+    {
+      "name": "notify_phone_nid12_alice",
+      "description": "A phone NOTIFY (title Alice, body \"Dinner at 7?\", severity info, tag 12, ts 1700000000000, nid 12) as the app writes it.",
+      "hex": "BF 65 74 69 74 6C 65 65 41 6C 69 63 65 64 62 6F 64 79 6C 44 69 6E 6E 65 72 20 61 74 20 37 3F 68 73 65 76 65 72 69 74 79 64 69 6E 66 6F 63 74 61 67 62 31 32 62 74 73 1B 00 00 01 8B CF E5 68 00 63 6E 69 64 0C FF"
+    },
+    {
+      "name": "pong_rid5_enc_false",
+      "description": "PONG for request 5 on an unencrypted link (firmware 2.4.101+).",
+      "hex": "A2 63 72 69 64 05 63 65 6E 63 F4"
+    },
+    {
+      "name": "pong_rid5_enc_true",
+      "description": "PONG for request 5 on an encrypted link.",
+      "hex": "A2 63 72 69 64 05 63 65 6E 63 F5"
+    },
+    {
+      "name": "crc32_single_zero_byte",
+      "description": "CRC-32 (ISO 3309, as binascii.crc32) of the single byte 00, the CONFIG_PUSH_ACK checksum reference.",
+      "hex": "00",
+      "value": 3523407757
+    }
+  ]
+}

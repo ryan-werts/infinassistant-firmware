@@ -1,0 +1,44 @@
+diff --git a/src/displayapp/screens/Notifications.cpp b/src/displayapp/screens/Notifications.cpp
+--- a/src/displayapp/screens/Notifications.cpp
++++ b/src/displayapp/screens/Notifications.cpp
+@@ -79,9 +79,6 @@
+       lv_line_set_points(timeoutLine, timeoutLinePoints, 2);
+     }
+ 
+-  } else if (mode == Modes::Preview && dismissingNotification) {
+-    running = false;
+-
+   } else if (dismissingNotification) {
+     dismissingNotification = false;
+     auto notification = notificationManager.Get(currentId);
+@@ -138,12 +135,10 @@
+ }
+ 
+ void Notifications::OnPreviewDismiss() {
+-  notificationManager.Dismiss(currentId);
+-  if (timeoutLine != nullptr) {
+-    lv_obj_del(timeoutLine);
+-    timeoutLine = nullptr;
+-  }
+-  DismissToBlack();
++  // Leave the preview for the list, so that dismissing the notification shows the next one
++  interacted = true;
++  OnPreviewInteraction();
++  mode = Modes::Normal;
+ }
+ 
+ bool Notifications::OnTouchEvent(Pinetime::Applications::TouchEvents event) {
+@@ -153,8 +148,12 @@
+       OnPreviewInteraction();
+       return true;
+     } else if (event == Pinetime::Applications::TouchEvents::SwipeRight) {
++      if (!validDisplay) {
++        running = false;
++        return true;
++      }
+       OnPreviewDismiss();
+-      return true;
++      return OnTouchEvent(event);
+     }
+     return false;
+   }

@@ -1,0 +1,109 @@
+Montserrat 14 and 18 regenerated with U+00B0 for the v8 dashboard (firmware 2.4.98). Applies to the
+LVGL submodule on top of its 1-bit regenerated fonts. Regenerated with lv_font_conv (the options are in each file's header comment).
+
+--- a/src/lv_font/lv_font_montserrat_14.c
++++ b/src/lv_font/lv_font_montserrat_14.c
+@@ -1,7 +1,7 @@
+ /*******************************************************************************
+  * Size: 14 px
+  * Bpp: 1
+- * Opts: --no-compress --no-prefilter --no-kerning --bpp 1 --size 14 --font scripts/built_in_font/Montserrat-Medium.ttf -r 0x20-0x7F --format lvgl -o lv_font_montserrat_14.c
++ * Opts: --no-compress --no-prefilter --no-kerning --bpp 1 --size 14 --font scripts/built_in_font/Montserrat-Medium.ttf -r 0x20-0x7F,0xB0 --format lvgl -o lv_font_montserrat_14.c
+  ******************************************************************************/
+ 
+ #ifdef LV_LVGL_H_INCLUDE_SIMPLE
+@@ -359,7 +359,10 @@
+     0xc4, 0x44, 0x44, 0x34, 0x44, 0x44, 0x48,
+ 
+     /* U+007E "~" */
+-    0x65, 0x38
++    0x65, 0x38,
++
++    /* U+00B0 "°" */
++    0x74, 0x63, 0x17, 0x0
+ };
+ 
+ 
+@@ -463,7 +466,8 @@
+     {.bitmap_index = 761, .adv_w = 79, .box_w = 3, .box_h = 14, .ofs_x = 1, .ofs_y = -3},
+     {.bitmap_index = 767, .adv_w = 67, .box_w = 1, .box_h = 14, .ofs_x = 1, .ofs_y = -3},
+     {.bitmap_index = 769, .adv_w = 79, .box_w = 4, .box_h = 14, .ofs_x = 1, .ofs_y = -3},
+-    {.bitmap_index = 776, .adv_w = 130, .box_w = 7, .box_h = 2, .ofs_x = 1, .ofs_y = 4}
++    {.bitmap_index = 776, .adv_w = 130, .box_w = 7, .box_h = 2, .ofs_x = 1, .ofs_y = 4},
++    {.bitmap_index = 778, .adv_w = 94, .box_w = 5, .box_h = 5, .ofs_x = 1, .ofs_y = 6}
+ };
+ 
+ /*---------------------
+@@ -478,6 +482,10 @@
+     {
+         .range_start = 32, .range_length = 95, .glyph_id_start = 1,
+         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
++    },
++    {
++        .range_start = 176, .range_length = 1, .glyph_id_start = 96,
++        .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
+     }
+ };
+ 
+@@ -502,7 +510,7 @@
+     .cmaps = cmaps,
+     .kern_dsc = NULL,
+     .kern_scale = 0,
+-    .cmap_num = 1,
++    .cmap_num = 2,
+     .bpp = 1,
+     .kern_classes = 0,
+     .bitmap_format = 0,
+--- a/src/lv_font/lv_font_montserrat_18.c
++++ b/src/lv_font/lv_font_montserrat_18.c
+@@ -1,7 +1,7 @@
+ /*******************************************************************************
+  * Size: 18 px
+  * Bpp: 1
+- * Opts: --no-compress --no-prefilter --no-kerning --bpp 1 --size 18 --font scripts/built_in_font/Montserrat-Medium.ttf -r 0x20-0x7F --format lvgl -o lv_font_montserrat_18.c
++ * Opts: --no-compress --no-prefilter --no-kerning --bpp 1 --size 18 --font scripts/built_in_font/Montserrat-Medium.ttf -r 0x20-0x7F,0xB0 --format lvgl -o lv_font_montserrat_18.c
+  ******************************************************************************/
+ 
+ #ifdef LV_LVGL_H_INCLUDE_SIMPLE
+@@ -427,7 +427,10 @@
+     0x18, 0xc6, 0x37, 0x0,
+ 
+     /* U+007E "~" */
+-    0x71, 0x99, 0x8e
++    0x71, 0x99, 0x8e,
++
++    /* U+00B0 "°" */
++    0x7b, 0x38, 0x61, 0xcd, 0xe0
+ };
+ 
+ 
+@@ -531,7 +534,8 @@
+     {.bitmap_index = 1272, .adv_w = 101, .box_w = 6, .box_h = 18, .ofs_x = 1, .ofs_y = -4},
+     {.bitmap_index = 1286, .adv_w = 86, .box_w = 2, .box_h = 18, .ofs_x = 2, .ofs_y = -4},
+     {.bitmap_index = 1291, .adv_w = 101, .box_w = 5, .box_h = 18, .ofs_x = 0, .ofs_y = -4},
+-    {.bitmap_index = 1303, .adv_w = 168, .box_w = 8, .box_h = 3, .ofs_x = 1, .ofs_y = 5}
++    {.bitmap_index = 1303, .adv_w = 168, .box_w = 8, .box_h = 3, .ofs_x = 1, .ofs_y = 5},
++    {.bitmap_index = 1306, .adv_w = 121, .box_w = 6, .box_h = 6, .ofs_x = 1, .ofs_y = 7}
+ };
+ 
+ /*---------------------
+@@ -546,6 +550,10 @@
+     {
+         .range_start = 32, .range_length = 95, .glyph_id_start = 1,
+         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
++    },
++    {
++        .range_start = 176, .range_length = 1, .glyph_id_start = 96,
++        .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
+     }
+ };
+ 
+@@ -570,7 +578,7 @@
+     .cmaps = cmaps,
+     .kern_dsc = NULL,
+     .kern_scale = 0,
+-    .cmap_num = 1,
++    .cmap_num = 2,
+     .bpp = 1,
+     .kern_classes = 0,
+     .bitmap_format = 0,

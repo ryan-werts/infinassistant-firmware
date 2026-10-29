@@ -1,0 +1,29 @@
+# Toolchain file for the first configure: arm-gcc-toolchain.cmake plus the toolchain path.
+#
+# CMake runs a toolchain file again for each try_compile and for the reconfigure that follows the
+# first pass, and that second pass drops -DARM_NONE_EABI_TOOLCHAIN_PATH from the cache, so
+# arm-gcc-toolchain.cmake does not find the compiler. This file keeps the path and its bin directory
+# in the cache before it includes the original.
+#
+# Use it as the toolchain file and pass the toolchain root as usual:
+#   cmake -DCMAKE_TOOLCHAIN_FILE=<tree>/cmake-nRF5x/arm-gcc-toolchain-fixed.cmake \
+#         -DARM_NONE_EABI_TOOLCHAIN_PATH=<toolchain root> ...
+# The ARM_NONE_EABI_TOOLCHAIN_PATH environment variable is read when the option is not given.
+# try_compile projects read this file too, and only the variables listed here reach them.
+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES ARM_NONE_EABI_TOOLCHAIN_PATH ARM_NONE_EABI_TOOLCHAIN_BIN_PATH)
+
+if(DEFINED ARM_GCC_TOOLCHAIN)
+    return()
+endif()
+
+if(NOT ARM_NONE_EABI_TOOLCHAIN_PATH AND DEFINED ENV{ARM_NONE_EABI_TOOLCHAIN_PATH})
+    set(ARM_NONE_EABI_TOOLCHAIN_PATH "$ENV{ARM_NONE_EABI_TOOLCHAIN_PATH}")
+endif()
+if(NOT ARM_NONE_EABI_TOOLCHAIN_PATH)
+    message(FATAL_ERROR "Pass the arm-none-eabi toolchain root: -DARM_NONE_EABI_TOOLCHAIN_PATH=<path>")
+endif()
+
+set(ARM_NONE_EABI_TOOLCHAIN_PATH "${ARM_NONE_EABI_TOOLCHAIN_PATH}" CACHE PATH "Toolchain root")
+set(ARM_NONE_EABI_TOOLCHAIN_BIN_PATH "${ARM_NONE_EABI_TOOLCHAIN_PATH}/bin" CACHE PATH "Toolchain bin")
+
+include("${CMAKE_CURRENT_LIST_DIR}/arm-gcc-toolchain.cmake")

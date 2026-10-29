@@ -1,0 +1,23 @@
+diff --git a/src/displayapp/DisplayApp.cpp b/src/displayapp/DisplayApp.cpp
+index 2ea56c0..e50ee19 100644
+--- a/src/displayapp/DisplayApp.cpp
++++ b/src/displayapp/DisplayApp.cpp
+@@ -1,5 +1,6 @@
+ #include "displayapp/DisplayApp.h"
+ #include "ha_bridge/BootConfirm.h"
++#include "ha_bridge/BridgeController.h"
+ #include <libraries/log/nrf_log.h>
+ #include "displayapp/screens/HeartRate.h"
+ #include "displayapp/screens/Motion.h"
+@@ -574,6 +575,11 @@ void DisplayApp::Refresh() {
+         LoadNewScreen(Apps::SysInfo, DisplayApp::FullRefreshDirections::Up);
+         break;
+       case Messages::ButtonDoubleClicked:
++        // With the phone's bridge on the link the double-click is the voice trigger: it sends
++        // ACTION_INVOKE 0xFFFE and the click is consumed. Without a bridge, Notifications as before.
++        if (controllers.bridgeController != nullptr && controllers.bridgeController->OnButtonDoubleClicked()) {
++          break;
++        }
+         if (currentApp != Apps::Notifications && currentApp != Apps::NotificationsPreview) {
+           LoadNewScreen(Apps::Notifications, DisplayApp::FullRefreshDirections::Down);
+         }

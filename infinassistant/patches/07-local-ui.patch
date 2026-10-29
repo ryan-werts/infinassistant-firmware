@@ -1,0 +1,791 @@
+Upstream files that the 2.4.102 build tree changes and 00-06 did not carry (README, Gap audit). Applies after 06,
+at the root of the InfiniTime tree:
+- const lv_font_t: LV_FONT_DECLARE is const since 02a, so every user of an LVGL font takes a const font
+  (Dice, Metronome, Notifications, StopWatch, widgets/Counter), and the generated fonts are made const to match
+  (fonts/CMakeLists.txt). Without these the build stops at "conflicting type qualifiers".
+- fonts.json: the three night weather glyphs (0xf186 0xf6c3 0xf73c) are dropped from the 25 px font and six glyphs
+  (0xf00b 0xf0e7 0xf240 0xf241 0xf243 0xf244) are added to jetbrains_mono_bold_20.
+- Weather symbols: GetSymbol() has no night variant, which follows from the dropped night glyphs (WeatherSymbols.*,
+  Weather, WatchFaceDigital, WatchFacePineTimeStyle).
+- ha_bridge/ProtocolMessages.cpp is deleted: 00 creates it, the overlay no longer has it (6fbe1cf).
+
+diff --git a/src/displayapp/fonts/CMakeLists.txt b/src/displayapp/fonts/CMakeLists.txt
+index 562f0801..b16749e4 100644
+--- a/src/displayapp/fonts/CMakeLists.txt
++++ b/src/displayapp/fonts/CMakeLists.txt
+@@ -27,6 +27,15 @@ foreach(FONT ${FONTS})
+       COMMAND "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/generate.py
+       --lv-font-conv "${LV_FONT_CONV}"
+       --font ${FONT} ${CMAKE_CURRENT_SOURCE_DIR}/fonts.json
++      # This fork const-qualifies LV_FONT_DECLARE / LV_FONT_CUSTOM_DECLARE, and
++      # its lv_font_montserrat_*.c were patched to match. lv_font_conv only
++      # emits a const definition for LVGL >= 8, so on this LVGL 7 tree every
++      # generated font is non-const and the build dies with
++      #   error: conflicting type qualifiers for '<font>'
++      # That went unnoticed for a long time because the stale .obj files were
++      # never recompiled; it only surfaces on a clean build. const-qualify the
++      # generated definition to match the declaration.
++      COMMAND sed -i "s@^lv_font_t ${FONT} = {@const lv_font_t ${FONT} = {@" ${CMAKE_CURRENT_BINARY_DIR}/${FONT}.c
+       DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/fonts.json
+       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    )
+diff --git a/src/displayapp/fonts/fonts.json b/src/displayapp/fonts/fonts.json
+index 3221c2f1..47fbc3e8 100644
+--- a/src/displayapp/fonts/fonts.json
++++ b/src/displayapp/fonts/fonts.json
+@@ -7,12 +7,15 @@
+          },
+          {
+             "file": "FontAwesome5-Solid+Brands+Regular.woff",
+-            "range": "0xf294, 0xf242, 0xf54b, 0xf21e, 0xf1e6, 0xf017, 0xf129, 0xf03a, 0xf185, 0xf560, 0xf001, 0xf3fd, 0xf1fc, 0xf45d, 0xf59f, 0xf5a0, 0xf027, 0xf028, 0xf6a9, 0xf04b, 0xf04c, 0xf048, 0xf051, 0xf095, 0xf3dd, 0xf04d, 0xf2f2, 0xf024, 0xf252, 0xf569, 0xf06e, 0xf015, 0xf00c, 0xf0f3, 0xf522, 0xf743, 0xf1ec, 0xf55a, 0xf3ed"
++            "range": "0xf294, 0xf242, 0xf54b, 0xf21e, 0xf1e6, 0xf017, 0xf129, 0xf03a, 0xf185, 0xf560, 0xf001, 0xf3fd, 0xf1fc, 0xf45d, 0xf59f, 0xf5a0, 0xf027, 0xf028, 0xf6a9, 0xf04b, 0xf04c, 0xf048, 0xf051, 0xf095, 0xf3dd, 0xf04d, 0xf2f2, 0xf024, 0xf252, 0xf569, 0xf06e, 0xf015, 0xf00c, 0xf0f3, 0xf522, 0xf743, 0xf1ec, 0xf55a, 0xf3ed, 0xf00b, 0xf0e7, 0xf240, 0xf241, 0xf243, 0xf244"
+          }
+       ],
+       "bpp": 1,
+       "size": 20,
+-      "patches": ["jetbrains_mono_bold_20.c_zero.patch", "jetbrains_mono_bold_20.c_M.patch"]
++      "patches": [
++         "jetbrains_mono_bold_20.c_zero.patch",
++         "jetbrains_mono_bold_20.c_M.patch"
++      ]
+    },
+    "jetbrains_mono_42": {
+       "sources": [
+@@ -68,10 +71,10 @@
+       "sources": [
+          {
+             "file": "FontAwesome5-Solid+Brands+Regular.woff",
+-            "range": "0xf185, 0xf186, 0xf6c3, 0xf6c4, 0xf73c, 0xf743, 0xf740, 0xf75f, 0xf0c2, 0xf05e, 0xf73b, 0xf0e7, 0xf2dc"
++            "range": "0xf185, 0xf6c4, 0xf743, 0xf740, 0xf75f, 0xf0c2, 0xf05e, 0xf73b, 0xf0e7, 0xf2dc"
+          }
+       ],
+       "bpp": 1,
+       "size": 25
+    }
+-}
++}
+\ No newline at end of file
+diff --git a/src/displayapp/screens/Dice.cpp b/src/displayapp/screens/Dice.cpp
+index 302c5f3f..b05201b6 100644
+--- a/src/displayapp/screens/Dice.cpp
++++ b/src/displayapp/screens/Dice.cpp
+@@ -8,7 +8,7 @@
+ using namespace Pinetime::Applications::Screens;
+ 
+ namespace {
+-  lv_obj_t* MakeLabel(lv_font_t* font,
++  lv_obj_t* MakeLabel(const lv_font_t* font,
+                       lv_color_t color,
+                       lv_label_long_mode_t longMode,
+                       uint8_t width,
+diff --git a/src/displayapp/screens/Metronome.cpp b/src/displayapp/screens/Metronome.cpp
+index 6b758470..07a5b9c5 100644
+--- a/src/displayapp/screens/Metronome.cpp
++++ b/src/displayapp/screens/Metronome.cpp
+@@ -10,7 +10,7 @@ namespace {
+     screen->OnEvent(obj, event);
+   }
+ 
+-  lv_obj_t* createLabel(const char* name, lv_obj_t* reference, lv_align_t align, lv_font_t* font, uint8_t x, uint8_t y) {
++  lv_obj_t* createLabel(const char* name, lv_obj_t* reference, lv_align_t align, const lv_font_t* font, uint8_t x, uint8_t y) {
+     lv_obj_t* label = lv_label_create(lv_scr_act(), nullptr);
+     lv_obj_set_style_local_text_font(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
+     lv_obj_set_style_local_text_color(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, Colors::lightGray);
+diff --git a/src/displayapp/screens/Notifications.cpp b/src/displayapp/screens/Notifications.cpp
+index 34875b21..8c7a231d 100644
+--- a/src/displayapp/screens/Notifications.cpp
++++ b/src/displayapp/screens/Notifications.cpp
+@@ -7,8 +7,8 @@
+ #include "displayapp/InfiniTimeTheme.h"
+ 
+ using namespace Pinetime::Applications::Screens;
+-extern lv_font_t jetbrains_mono_extrabold_compressed;
+-extern lv_font_t jetbrains_mono_bold_20;
++extern const lv_font_t jetbrains_mono_extrabold_compressed;
++extern const lv_font_t jetbrains_mono_bold_20;
+ 
+ Notifications::Notifications(DisplayApp* app,
+                              Pinetime::Controllers::NotificationManager& notificationManager,
+diff --git a/src/displayapp/screens/StopWatch.cpp b/src/displayapp/screens/StopWatch.cpp
+index 8d029019..433f32e5 100644
+--- a/src/displayapp/screens/StopWatch.cpp
++++ b/src/displayapp/screens/StopWatch.cpp
+@@ -201,7 +201,7 @@ void StopWatch::RenderLaps() {
+ 
+ void StopWatch::SetHoursVisible(bool visible) {
+   if (hoursVisible != visible) {
+-    lv_font_t* font = visible ? &jetbrains_mono_42 : &jetbrains_mono_76;
++    const lv_font_t* font = visible ? &jetbrains_mono_42 : &jetbrains_mono_76;
+     lv_obj_set_style_local_text_font(time, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, font);
+     lv_obj_set_height(time, font->line_height);
+     lv_obj_align(time, lv_scr_act(), LV_ALIGN_IN_TOP_MID, 0, visible ? 5 : 0);
+diff --git a/src/displayapp/screens/WatchFaceDigital.cpp b/src/displayapp/screens/WatchFaceDigital.cpp
+index a037abfe..3163c6e7 100644
+--- a/src/displayapp/screens/WatchFaceDigital.cpp
++++ b/src/displayapp/screens/WatchFaceDigital.cpp
+@@ -183,7 +183,7 @@ void WatchFaceDigital::Refresh() {
+         tempUnit = 'F';
+       }
+       lv_label_set_text_fmt(temperature, "%d°%c", temp, tempUnit);
+-      lv_label_set_text(weatherIcon, Symbols::GetSymbol(optCurrentWeather->iconId, weatherService.IsNight()));
++      lv_label_set_text(weatherIcon, Symbols::GetSymbol(optCurrentWeather->iconId));
+     } else {
+       lv_label_set_text_static(temperature, "");
+       lv_label_set_text(weatherIcon, "");
+diff --git a/src/displayapp/screens/WatchFacePineTimeStyle.cpp b/src/displayapp/screens/WatchFacePineTimeStyle.cpp
+index bfbbe24b..ce8f8f7e 100644
+--- a/src/displayapp/screens/WatchFacePineTimeStyle.cpp
++++ b/src/displayapp/screens/WatchFacePineTimeStyle.cpp
+@@ -548,7 +548,7 @@ void WatchFacePineTimeStyle::Refresh() {
+         temp = optCurrentWeather->temperature.Fahrenheit();
+       }
+       lv_label_set_text_fmt(temperature, "%d°", temp);
+-      lv_label_set_text(weatherIcon, Symbols::GetSymbol(optCurrentWeather->iconId, weatherService.IsNight()));
++      lv_label_set_text(weatherIcon, Symbols::GetSymbol(optCurrentWeather->iconId));
+     } else {
+       lv_label_set_text(temperature, "--");
+       lv_label_set_text(weatherIcon, Symbols::ban);
+diff --git a/src/displayapp/screens/Weather.cpp b/src/displayapp/screens/Weather.cpp
+index de32a153..0e44df03 100644
+--- a/src/displayapp/screens/Weather.cpp
++++ b/src/displayapp/screens/Weather.cpp
+@@ -118,7 +118,7 @@ void Weather::Refresh() {
+         tempUnit = 'F';
+       }
+       lv_obj_set_style_local_text_color(temperature, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, optCurrentWeather->temperature.Color());
+-      lv_label_set_text(icon, Symbols::GetSymbol(optCurrentWeather->iconId, weatherService.IsNight()));
++      lv_label_set_text(icon, Symbols::GetSymbol(optCurrentWeather->iconId));
+       lv_label_set_text(condition, Symbols::GetCondition(optCurrentWeather->iconId));
+       lv_label_set_text_fmt(temperature, "%d°%c", temp, tempUnit);
+       lv_label_set_text_fmt(minTemperature, "%d°", minTemp);
+@@ -154,7 +154,7 @@ void Weather::Refresh() {
+         }
+         const char* dayOfWeek = Controllers::DateTime::DayOfWeekShortToStringLow(static_cast<Controllers::DateTime::Days>(wday));
+         lv_table_set_cell_value(forecast, 0, i, dayOfWeek);
+-        lv_table_set_cell_value(forecast, 1, i, Symbols::GetSymbol(optCurrentForecast->days[i]->iconId, false));
++        lv_table_set_cell_value(forecast, 1, i, Symbols::GetSymbol(optCurrentForecast->days[i]->iconId));
+         // Pad cells based on the largest number of digits on each column
+         char maxPadding[3] = "  ";
+         char minPadding[3] = "  ";
+diff --git a/src/displayapp/screens/WeatherSymbols.cpp b/src/displayapp/screens/WeatherSymbols.cpp
+index 762180c7..0a963bc6 100644
+--- a/src/displayapp/screens/WeatherSymbols.cpp
++++ b/src/displayapp/screens/WeatherSymbols.cpp
+@@ -1,18 +1,11 @@
+ #include "displayapp/screens/WeatherSymbols.h"
+ 
+-const char* Pinetime::Applications::Screens::Symbols::GetSymbol(const Pinetime::Controllers::SimpleWeatherService::Icons icon,
+-                                                                const bool isNight) {
++const char* Pinetime::Applications::Screens::Symbols::GetSymbol(const Pinetime::Controllers::SimpleWeatherService::Icons icon) {
+   switch (icon) {
+     case Pinetime::Controllers::SimpleWeatherService::Icons::Sun:
+-      if (isNight) {
+-        return Symbols::moon;
+-      }
+       return Symbols::sun;
+       break;
+     case Pinetime::Controllers::SimpleWeatherService::Icons::CloudsSun:
+-      if (isNight) {
+-        return Symbols::cloudMoon;
+-      }
+       return Symbols::cloudSun;
+       break;
+     case Pinetime::Controllers::SimpleWeatherService::Icons::Clouds:
+@@ -31,9 +24,6 @@ const char* Pinetime::Applications::Screens::Symbols::GetSymbol(const Pinetime::
+       return Symbols::cloudShowersHeavy;
+       break;
+     case Pinetime::Controllers::SimpleWeatherService::Icons::CloudSunRain:
+-      if (isNight) {
+-        return Symbols::cloudMoonRain;
+-      }
+       return Symbols::cloudSunRain;
+       break;
+     case Pinetime::Controllers::SimpleWeatherService::Icons::Smog:
+diff --git a/src/displayapp/screens/WeatherSymbols.h b/src/displayapp/screens/WeatherSymbols.h
+index 15c8a8a3..0fed0bdc 100644
+--- a/src/displayapp/screens/WeatherSymbols.h
++++ b/src/displayapp/screens/WeatherSymbols.h
+@@ -6,7 +6,7 @@ namespace Pinetime {
+   namespace Applications {
+     namespace Screens {
+       namespace Symbols {
+-        const char* GetSymbol(const Pinetime::Controllers::SimpleWeatherService::Icons icon, const bool isNight);
++        const char* GetSymbol(const Pinetime::Controllers::SimpleWeatherService::Icons icon);
+         const char* GetCondition(const Pinetime::Controllers::SimpleWeatherService::Icons icon);
+         const char* GetSimpleCondition(const Pinetime::Controllers::SimpleWeatherService::Icons icon);
+       }
+diff --git a/src/displayapp/widgets/Counter.cpp b/src/displayapp/widgets/Counter.cpp
+index b486e372..0a018080 100644
+--- a/src/displayapp/widgets/Counter.cpp
++++ b/src/displayapp/widgets/Counter.cpp
+@@ -29,7 +29,7 @@ namespace {
+   }
+ }
+ 
+-Counter::Counter(int min, int max, lv_font_t& font) : min {min}, max {max}, value {min}, leadingZeroCount {digitCount(max)}, font {font} {
++Counter::Counter(int min, int max, const lv_font_t& font) : min {min}, max {max}, value {min}, leadingZeroCount {digitCount(max)}, font {font} {
+ }
+ 
+ void Counter::UpBtnPressed() {
+diff --git a/src/displayapp/widgets/Counter.h b/src/displayapp/widgets/Counter.h
+index 825860b8..c63fe308 100644
+--- a/src/displayapp/widgets/Counter.h
++++ b/src/displayapp/widgets/Counter.h
+@@ -6,7 +6,7 @@ namespace Pinetime {
+     namespace Widgets {
+       class Counter {
+       public:
+-        Counter(int min, int max, lv_font_t& font);
++        Counter(int min, int max, const lv_font_t& font);
+ 
+         void Create();
+         void UpBtnPressed();
+@@ -44,7 +44,7 @@ namespace Pinetime {
+         const int leadingZeroCount;
+         bool twelveHourMode = false;
+         bool monthMode = false;
+-        lv_font_t& font;
++        const lv_font_t& font;
+ 
+         void* userData = nullptr;
+       };
+diff --git a/src/ha_bridge/ProtocolMessages.cpp b/src/ha_bridge/ProtocolMessages.cpp
+deleted file mode 100755
+index 0684bdbd..00000000
+--- a/src/ha_bridge/ProtocolMessages.cpp
++++ /dev/null
+@@ -1,534 +0,0 @@
+-#include "ProtocolMessages.h"
+-#include <cbor.h>
+-#include <cstring>
+-
+-namespace Pinetime {
+-namespace Applications {
+-namespace HaBridge {
+-
+-// Helper to encode string to CBOR
+-static bool EncodeString(CborEncoder* encoder, const std::string& str) {
+-  return cbor_encode_text_stringz(encoder, str.c_str()) == CborNoError;
+-}
+-
+-// Helper to decode string from CBOR
+-static bool DecodeString(CborValue* value, std::string& out) {
+-  if (!cbor_value_is_text_string(value)) return false;
+-
+-  size_t len = 0;
+-  if (cbor_value_calculate_string_length(value, &len) != CborNoError) return false;
+-
+-  std::vector<char> buffer(len + 1);
+-  if (cbor_value_copy_text_string(value, buffer.data(), &len, value) != CborNoError) return false;
+-
+-  buffer[len] = '\0';
+-  out = std::string(buffer.data());
+-  return true;
+-}
+-
+-// HaAction encoding/decoding
+-bool HaAction::EncodeCbor(std::vector<uint8_t>& output) const {
+-  uint8_t buffer[512];
+-  CborEncoder encoder, mapEncoder;
+-  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
+-
+-  if (cbor_encoder_create_map(&encoder, &mapEncoder, 5) != CborNoError) return false;
+-
+-  // actionId
+-  if (cbor_encode_text_stringz(&mapEncoder, "actionId") != CborNoError) return false;
+-  if (cbor_encode_uint(&mapEncoder, actionId) != CborNoError) return false;
+-
+-  // label
+-  if (cbor_encode_text_stringz(&mapEncoder, "label") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, label)) return false;
+-
+-  // entityId
+-  if (cbor_encode_text_stringz(&mapEncoder, "entityId") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, entityId)) return false;
+-
+-  // serviceAction
+-  if (cbor_encode_text_stringz(&mapEncoder, "serviceAction") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, serviceAction)) return false;
+-
+-  // serviceData (optional map)
+-  if (cbor_encode_text_stringz(&mapEncoder, "serviceData") != CborNoError) return false;
+-  CborEncoder dataMapEncoder;
+-  if (cbor_encoder_create_map(&mapEncoder, &dataMapEncoder, serviceData.size()) != CborNoError) return false;
+-  for (const auto& [key, value] : serviceData) {
+-    if (!EncodeString(&dataMapEncoder, key)) return false;
+-    if (!EncodeString(&dataMapEncoder, value)) return false;
+-  }
+-  if (cbor_encoder_close_container(&mapEncoder, &dataMapEncoder) != CborNoError) return false;
+-
+-  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
+-
+-  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
+-  output.insert(output.end(), buffer, buffer + len);
+-  return true;
+-}
+-
+-bool HaAction::DecodeCbor(const uint8_t* data, size_t len, HaAction& out) {
+-  CborParser parser;
+-  CborValue value, mapValue;
+-
+-  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
+-  if (!cbor_value_is_map(&value)) return false;
+-
+-  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
+-
+-  while (!cbor_value_at_end(&mapValue)) {
+-    std::string key;
+-    if (!DecodeString(&mapValue, key)) return false;
+-
+-    if (key == "actionId") {
+-      uint64_t id;
+-      if (cbor_value_get_uint64(&mapValue, &id) != CborNoError) return false;
+-      out.actionId = static_cast<uint8_t>(id);
+-      cbor_value_advance(&mapValue);
+-    } else if (key == "label") {
+-      if (!DecodeString(&mapValue, out.label)) return false;
+-    } else if (key == "entityId") {
+-      if (!DecodeString(&mapValue, out.entityId)) return false;
+-    } else if (key == "serviceAction") {
+-      if (!DecodeString(&mapValue, out.serviceAction)) return false;
+-    } else if (key == "serviceData") {
+-      if (!cbor_value_is_map(&mapValue)) return false;
+-      CborValue dataMap;
+-      if (cbor_value_enter_container(&mapValue, &dataMap) != CborNoError) return false;
+-      while (!cbor_value_at_end(&dataMap)) {
+-        std::string k, v;
+-        if (!DecodeString(&dataMap, k)) return false;
+-        if (!DecodeString(&dataMap, v)) return false;
+-        out.serviceData.push_back({k, v});
+-      }
+-      cbor_value_leave_container(&mapValue, &dataMap);
+-    } else {
+-      cbor_value_advance(&mapValue);
+-    }
+-  }
+-
+-  cbor_value_leave_container(&value, &mapValue);
+-  return true;
+-}
+-
+-// HaEntity encoding/decoding
+-bool HaEntity::EncodeCbor(std::vector<uint8_t>& output) const {
+-  uint8_t buffer[512];
+-  CborEncoder encoder, mapEncoder;
+-  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
+-
+-  if (cbor_encoder_create_map(&encoder, &mapEncoder, 7) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "entityId") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, entityId)) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "name") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, name)) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "state") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, state)) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "unit") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, unit)) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "precision") != CborNoError) return false;
+-  if (cbor_encode_uint(&mapEncoder, precision) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "showUnits") != CborNoError) return false;
+-  if (cbor_encode_boolean(&mapEncoder, showUnits) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "showIcon") != CborNoError) return false;
+-  if (cbor_encode_boolean(&mapEncoder, showIcon) != CborNoError) return false;
+-
+-  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
+-
+-  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
+-  output.insert(output.end(), buffer, buffer + len);
+-  return true;
+-}
+-
+-bool HaEntity::DecodeCbor(const uint8_t* data, size_t len, HaEntity& out) {
+-  CborParser parser;
+-  CborValue value, mapValue;
+-
+-  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
+-  if (!cbor_value_is_map(&value)) return false;
+-
+-  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
+-
+-  while (!cbor_value_at_end(&mapValue)) {
+-    std::string key;
+-    if (!DecodeString(&mapValue, key)) return false;
+-
+-    if (key == "entityId") {
+-      if (!DecodeString(&mapValue, out.entityId)) return false;
+-    } else if (key == "name") {
+-      if (!DecodeString(&mapValue, out.name)) return false;
+-    } else if (key == "state") {
+-      if (!DecodeString(&mapValue, out.state)) return false;
+-    } else if (key == "unit") {
+-      if (!DecodeString(&mapValue, out.unit)) return false;
+-    } else if (key == "precision") {
+-      uint64_t p;
+-      if (cbor_value_get_uint64(&mapValue, &p) != CborNoError) return false;
+-      out.precision = static_cast<uint8_t>(p);
+-      cbor_value_advance(&mapValue);
+-    } else if (key == "showUnits") {
+-      bool val;
+-      if (cbor_value_get_boolean(&mapValue, &val) != CborNoError) return false;
+-      out.showUnits = val;
+-      cbor_value_advance(&mapValue);
+-    } else if (key == "showIcon") {
+-      bool val;
+-      if (cbor_value_get_boolean(&mapValue, &val) != CborNoError) return false;
+-      out.showIcon = val;
+-      cbor_value_advance(&mapValue);
+-    } else {
+-      cbor_value_advance(&mapValue);
+-    }
+-  }
+-
+-  cbor_value_leave_container(&value, &mapValue);
+-  return true;
+-}
+-
+-// ConfigPushMessage encoding/decoding
+-bool ConfigPushMessage::EncodeCbor(std::vector<uint8_t>& output) const {
+-  uint8_t buffer[2048];
+-  CborEncoder encoder, mapEncoder;
+-  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
+-
+-  if (cbor_encoder_create_map(&encoder, &mapEncoder, 2) != CborNoError) return false;
+-
+-  // actions array
+-  if (cbor_encode_text_stringz(&mapEncoder, "actions") != CborNoError) return false;
+-  CborEncoder actionsArray;
+-  if (cbor_encoder_create_array(&mapEncoder, &actionsArray, actions.size()) != CborNoError) return false;
+-  for (const auto& action : actions) {
+-    std::vector<uint8_t> actionData;
+-    if (!action.EncodeCbor(actionData)) return false;
+-    // Parse and re-encode to embed in array
+-    CborParser p;
+-    CborValue v;
+-    cbor_parser_init(actionData.data(), actionData.size(), 0, &p, &v);
+-    if (cbor_encoder_copy_value(&actionsArray, &v) != CborNoError) return false;
+-  }
+-  if (cbor_encoder_close_container(&mapEncoder, &actionsArray) != CborNoError) return false;
+-
+-  // entities array
+-  if (cbor_encode_text_stringz(&mapEncoder, "entities") != CborNoError) return false;
+-  CborEncoder entitiesArray;
+-  if (cbor_encoder_create_array(&mapEncoder, &entitiesArray, entities.size()) != CborNoError) return false;
+-  for (const auto& entity : entities) {
+-    std::vector<uint8_t> entityData;
+-    if (!entity.EncodeCbor(entityData)) return false;
+-    CborParser p;
+-    CborValue v;
+-    cbor_parser_init(entityData.data(), entityData.size(), 0, &p, &v);
+-    if (cbor_encoder_copy_value(&entitiesArray, &v) != CborNoError) return false;
+-  }
+-  if (cbor_encoder_close_container(&mapEncoder, &entitiesArray) != CborNoError) return false;
+-
+-  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
+-
+-  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
+-  output.insert(output.end(), buffer, buffer + len);
+-  return true;
+-}
+-
+-bool ConfigPushMessage::DecodeCbor(const uint8_t* data, size_t len, ConfigPushMessage& out) {
+-  CborParser parser;
+-  CborValue value, mapValue;
+-
+-  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
+-  if (!cbor_value_is_map(&value)) return false;
+-
+-  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
+-
+-  while (!cbor_value_at_end(&mapValue)) {
+-    std::string key;
+-    if (!DecodeString(&mapValue, key)) return false;
+-
+-    if (key == "actions") {
+-      if (!cbor_value_is_array(&mapValue)) return false;
+-      CborValue arrayValue;
+-      if (cbor_value_enter_container(&mapValue, &arrayValue) != CborNoError) return false;
+-
+-      while (!cbor_value_at_end(&arrayValue)) {
+-        // Get the raw bytes for this action
+-        size_t actionLen = 0;
+-        const uint8_t* actionData = cbor_value_get_next_byte(&arrayValue);
+-        cbor_value_advance(&arrayValue);
+-        // Note: This is simplified; production code would need proper length calculation
+-        HaAction action;
+-        // Decode would need the actual bytes - this is a simplification
+-        out.actions.push_back(action);
+-      }
+-      cbor_value_leave_container(&mapValue, &arrayValue);
+-    } else if (key == "entities") {
+-      if (!cbor_value_is_array(&mapValue)) return false;
+-      CborValue arrayValue;
+-      if (cbor_value_enter_container(&mapValue, &arrayValue) != CborNoError) return false;
+-
+-      while (!cbor_value_at_end(&arrayValue)) {
+-        HaEntity entity;
+-        // Similar to actions - simplified
+-        out.entities.push_back(entity);
+-        cbor_value_advance(&arrayValue);
+-      }
+-      cbor_value_leave_container(&mapValue, &arrayValue);
+-    } else {
+-      cbor_value_advance(&mapValue);
+-    }
+-  }
+-
+-  cbor_value_leave_container(&value, &mapValue);
+-  return true;
+-}
+-
+-// ActionInvokeMessage encoding/decoding
+-bool ActionInvokeMessage::EncodeCbor(std::vector<uint8_t>& output) const {
+-  uint8_t buffer[256];
+-  CborEncoder encoder, mapEncoder;
+-  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
+-
+-  if (cbor_encoder_create_map(&encoder, &mapEncoder, 2) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "actionId") != CborNoError) return false;
+-  if (cbor_encode_uint(&mapEncoder, actionId) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "gesture") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, gesture)) return false;
+-
+-  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
+-
+-  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
+-  output.insert(output.end(), buffer, buffer + len);
+-  return true;
+-}
+-
+-bool ActionInvokeMessage::DecodeCbor(const uint8_t* data, size_t len, ActionInvokeMessage& out) {
+-  CborParser parser;
+-  CborValue value, mapValue;
+-
+-  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
+-  if (!cbor_value_is_map(&value)) return false;
+-
+-  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
+-
+-  while (!cbor_value_at_end(&mapValue)) {
+-    std::string key;
+-    if (!DecodeString(&mapValue, key)) return false;
+-
+-    if (key == "actionId") {
+-      uint64_t id;
+-      if (cbor_value_get_uint64(&mapValue, &id) != CborNoError) return false;
+-      out.actionId = static_cast<uint8_t>(id);
+-      cbor_value_advance(&mapValue);
+-    } else if (key == "gesture") {
+-      if (!DecodeString(&mapValue, out.gesture)) return false;
+-    } else {
+-      cbor_value_advance(&mapValue);
+-    }
+-  }
+-
+-  cbor_value_leave_container(&value, &mapValue);
+-  return true;
+-}
+-
+-// StateUpdateMessage encoding/decoding
+-bool StateUpdateMessage::EncodeCbor(std::vector<uint8_t>& output) const {
+-  uint8_t buffer[2048];
+-  CborEncoder encoder, mapEncoder;
+-  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
+-
+-  if (cbor_encoder_create_map(&encoder, &mapEncoder, 1) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "entities") != CborNoError) return false;
+-  CborEncoder entitiesArray;
+-  if (cbor_encoder_create_array(&mapEncoder, &entitiesArray, entities.size()) != CborNoError) return false;
+-  for (const auto& entity : entities) {
+-    std::vector<uint8_t> entityData;
+-    if (!entity.EncodeCbor(entityData)) return false;
+-    CborParser p;
+-    CborValue v;
+-    cbor_parser_init(entityData.data(), entityData.size(), 0, &p, &v);
+-    if (cbor_encoder_copy_value(&entitiesArray, &v) != CborNoError) return false;
+-  }
+-  if (cbor_encoder_close_container(&mapEncoder, &entitiesArray) != CborNoError) return false;
+-
+-  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
+-
+-  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
+-  output.insert(output.end(), buffer, buffer + len);
+-  return true;
+-}
+-
+-bool StateUpdateMessage::DecodeCbor(const uint8_t* data, size_t len, StateUpdateMessage& out) {
+-  // Similar to ConfigPushMessage entities decoding
+-  CborParser parser;
+-  CborValue value, mapValue;
+-
+-  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
+-  if (!cbor_value_is_map(&value)) return false;
+-
+-  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
+-
+-  while (!cbor_value_at_end(&mapValue)) {
+-    std::string key;
+-    if (!DecodeString(&mapValue, key)) return false;
+-
+-    if (key == "entities") {
+-      if (!cbor_value_is_array(&mapValue)) return false;
+-      CborValue arrayValue;
+-      if (cbor_value_enter_container(&mapValue, &arrayValue) != CborNoError) return false;
+-
+-      while (!cbor_value_at_end(&arrayValue)) {
+-        HaEntity entity;
+-        out.entities.push_back(entity);
+-        cbor_value_advance(&arrayValue);
+-      }
+-      cbor_value_leave_container(&mapValue, &arrayValue);
+-    } else {
+-      cbor_value_advance(&mapValue);
+-    }
+-  }
+-
+-  cbor_value_leave_container(&value, &mapValue);
+-  return true;
+-}
+-
+-// HaNotification encoding/decoding
+-bool HaNotification::EncodeCbor(std::vector<uint8_t>& output) const {
+-  uint8_t buffer[1024];
+-  CborEncoder encoder, mapEncoder;
+-  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
+-
+-  if (cbor_encoder_create_map(&encoder, &mapEncoder, 5) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "tag") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, tag)) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "title") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, title)) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "body") != CborNoError) return false;
+-  if (!EncodeString(&mapEncoder, body)) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "timestamp") != CborNoError) return false;
+-  if (cbor_encode_uint(&mapEncoder, timestamp) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "actions") != CborNoError) return false;
+-  CborEncoder actionsArray;
+-  if (cbor_encoder_create_array(&mapEncoder, &actionsArray, actions.size()) != CborNoError) return false;
+-  for (const auto& action : actions) {
+-    if (!EncodeString(&actionsArray, action)) return false;
+-  }
+-  if (cbor_encoder_close_container(&mapEncoder, &actionsArray) != CborNoError) return false;
+-
+-  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
+-
+-  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
+-  output.insert(output.end(), buffer, buffer + len);
+-  return true;
+-}
+-
+-bool HaNotification::DecodeCbor(const uint8_t* data, size_t len, HaNotification& out) {
+-  CborParser parser;
+-  CborValue value, mapValue;
+-
+-  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
+-  if (!cbor_value_is_map(&value)) return false;
+-
+-  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
+-
+-  while (!cbor_value_at_end(&mapValue)) {
+-    std::string key;
+-    if (!DecodeString(&mapValue, key)) return false;
+-
+-    if (key == "tag") {
+-      if (!DecodeString(&mapValue, out.tag)) return false;
+-    } else if (key == "title") {
+-      if (!DecodeString(&mapValue, out.title)) return false;
+-    } else if (key == "body") {
+-      if (!DecodeString(&mapValue, out.body)) return false;
+-    } else if (key == "timestamp") {
+-      if (cbor_value_get_uint64(&mapValue, &out.timestamp) != CborNoError) return false;
+-      cbor_value_advance(&mapValue);
+-    } else if (key == "actions") {
+-      if (!cbor_value_is_array(&mapValue)) return false;
+-      CborValue arrayValue;
+-      if (cbor_value_enter_container(&mapValue, &arrayValue) != CborNoError) return false;
+-
+-      while (!cbor_value_at_end(&arrayValue)) {
+-        std::string action;
+-        if (!DecodeString(&arrayValue, action)) return false;
+-        out.actions.push_back(action);
+-      }
+-      cbor_value_leave_container(&mapValue, &arrayValue);
+-    } else {
+-      cbor_value_advance(&mapValue);
+-    }
+-  }
+-
+-  cbor_value_leave_container(&value, &mapValue);
+-  return true;
+-}
+-
+-// NotifPushMessage encoding/decoding
+-bool NotifPushMessage::EncodeCbor(std::vector<uint8_t>& output) const {
+-  uint8_t buffer[1024];
+-  CborEncoder encoder, mapEncoder;
+-  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
+-
+-  if (cbor_encoder_create_map(&encoder, &mapEncoder, 2) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "notification") != CborNoError) return false;
+-  std::vector<uint8_t> notifData;
+-  if (!notification.EncodeCbor(notifData)) return false;
+-  CborParser p;
+-  CborValue v;
+-  cbor_parser_init(notifData.data(), notifData.size(), 0, &p, &v);
+-  if (cbor_encoder_copy_value(&mapEncoder, &v) != CborNoError) return false;
+-
+-  if (cbor_encode_text_stringz(&mapEncoder, "deduplicate") != CborNoError) return false;
+-  if (cbor_encode_boolean(&mapEncoder, deduplicate) != CborNoError) return false;
+-
+-  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
+-
+-  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
+-  output.insert(output.end(), buffer, buffer + len);
+-  return true;
+-}
+-
+-bool NotifPushMessage::DecodeCbor(const uint8_t* data, size_t len, NotifPushMessage& out) {
+-  CborParser parser;
+-  CborValue value, mapValue;
+-
+-  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
+-  if (!cbor_value_is_map(&value)) return false;
+-
+-  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
+-
+-  while (!cbor_value_at_end(&mapValue)) {
+-    std::string key;
+-    if (!DecodeString(&mapValue, key)) return false;
+-
+-    if (key == "notification") {
+-      // Simplified - would need proper nested decoding
+-      cbor_value_advance(&mapValue);
+-    } else if (key == "deduplicate") {
+-      if (cbor_value_get_boolean(&mapValue, &out.deduplicate) != CborNoError) return false;
+-      cbor_value_advance(&mapValue);
+-    } else {
+-      cbor_value_advance(&mapValue);
+-    }
+-  }
+-
+-  cbor_value_leave_container(&value, &mapValue);
+-  return true;
+-}
+-
+-} // namespace HaBridge
+-} // namespace Applications
+-} // namespace Pinetime

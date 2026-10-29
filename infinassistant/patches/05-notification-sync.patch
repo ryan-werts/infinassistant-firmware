@@ -1,0 +1,176 @@
+diff --git a/src/components/ble/NotificationManager.h b/src/components/ble/NotificationManager.h
+--- a/src/components/ble/NotificationManager.h
++++ b/src/components/ble/NotificationManager.h
+@@ -38,7 +38,8 @@
+         const char* Title() const;
+       };
+ 
+-      void Push(Notification&& notif);
++      // Returns the id the new notification was given.
++      Notification::Id Push(Notification&& notif);
+       Notification GetLastNotification() const;
+       Notification Get(Notification::Id id) const;
+       Notification GetNext(Notification::Id id) const;
+@@ -49,6 +50,22 @@
+       bool AreNewNotificationsAvailable() const;
+       void Dismiss(Notification::Id id);
+ 
++      // Two hooks for the phone notification sync, called after the manager's own critical
++      // section has ended:
++      //  - dismiss: after Dismiss removed an entry (not when the id is not in the list). No lock
++      //    is held: the hook may take locks and send over BLE.
++      //  - push: after every Push, which may have pushed out the oldest entry with no other word.
++      //    The pusher may hold a critical section of its own (the sync pushes inside one), so the
++      //    hook must not block or send.
++      // Unset in a build without the sync.
++      using DismissHook = void (*)(void* context, Notification::Id id);
++      using PushHook = void (*)(void* context);
++      void SetHooks(DismissHook dismiss, PushHook push, void* context) {
++        hookContext = context;
++        dismissHook = dismiss;
++        pushHook = push;
++      }
++
+       static constexpr size_t MaximumMessageSize() {
+         return MessageSize;
+       };
+@@ -62,6 +79,7 @@
+     private:
+       Notification::Id nextId {0};
+       Notification::Id GetNextId();
++      Notification::Id PushLocked(Notification&& notif);
+       const Notification& At(Notification::Idx idx) const;
+       Notification& At(Notification::Idx idx);
+       void DismissIdx(Notification::Idx idx);
+@@ -72,6 +90,10 @@
+       size_t size = 0;                            // number of valid notifications in buffer
+ 
+       std::atomic<bool> newNotification {false};
++
++      DismissHook dismissHook = nullptr;
++      PushHook pushHook = nullptr;
++      void* hookContext = nullptr;
+     };
+   }
+ }
+diff --git a/src/components/ble/NotificationManager.cpp b/src/components/ble/NotificationManager.cpp
+--- a/src/components/ble/NotificationManager.cpp
++++ b/src/components/ble/NotificationManager.cpp
+@@ -2,12 +2,38 @@
+ #include <cstring>
+ #include <algorithm>
+ #include <cassert>
++#include <FreeRTOS.h>
++#include <task.h>
+ 
+ using namespace Pinetime::Controllers;
+ 
+ constexpr uint8_t NotificationManager::MessageSize;
+ 
+-void NotificationManager::Push(NotificationManager::Notification&& notif) {
++namespace {
++  // The list is changed from the NimBLE host task (a push, a remove from the phone) and from the
++  // display task (the user's dismiss). Every access runs inside a short critical section: a push
++  // or a dismiss moves at most five 104-byte entries. Critical sections nest, so a method may call
++  // another one that takes it too.
++  struct ListLock {
++    ListLock() {
++      taskENTER_CRITICAL();
++    }
++    ~ListLock() {
++      taskEXIT_CRITICAL();
++    }
++  };
++}
++
++NotificationManager::Notification::Id NotificationManager::Push(NotificationManager::Notification&& notif) {
++  const Notification::Id id = PushLocked(std::move(notif));
++  if (pushHook != nullptr) {
++    pushHook(hookContext);
++  }
++  return id;
++}
++
++NotificationManager::Notification::Id NotificationManager::PushLocked(NotificationManager::Notification&& notif) {
++  ListLock lock;
+   notif.id = GetNextId();
+   notif.valid = true;
+   newNotification = true;
+@@ -20,6 +46,7 @@
+   if (size < notifications.size()) {
+     size++;
+   }
++  return notifications[beginIdx].id;
+ }
+ 
+ NotificationManager::Notification::Id NotificationManager::GetNextId() {
+@@ -27,6 +54,7 @@
+ }
+ 
+ NotificationManager::Notification NotificationManager::GetLastNotification() const {
++  ListLock lock;
+   if (this->IsEmpty()) {
+     return {};
+   }
+@@ -52,6 +80,7 @@
+ }
+ 
+ NotificationManager::Notification::Idx NotificationManager::IndexOf(NotificationManager::Notification::Id id) const {
++  ListLock lock;
+   for (NotificationManager::Notification::Idx idx = 0; idx < this->size; idx++) {
+     const NotificationManager::Notification& notification = this->At(idx);
+     if (notification.id == id) {
+@@ -62,6 +91,7 @@
+ }
+ 
+ NotificationManager::Notification NotificationManager::Get(NotificationManager::Notification::Id id) const {
++  ListLock lock;
+   NotificationManager::Notification::Idx idx = this->IndexOf(id);
+   if (idx == this->size) {
+     return {};
+@@ -70,6 +100,7 @@
+ }
+ 
+ NotificationManager::Notification NotificationManager::GetNext(NotificationManager::Notification::Id id) const {
++  ListLock lock;
+   NotificationManager::Notification::Idx idx = this->IndexOf(id);
+   if (idx == this->size) {
+     return {};
+@@ -81,6 +112,7 @@
+ }
+ 
+ NotificationManager::Notification NotificationManager::GetPrevious(NotificationManager::Notification::Id id) const {
++  ListLock lock;
+   NotificationManager::Notification::Idx idx = this->IndexOf(id);
+   if (idx == this->size) {
+     return {};
+@@ -113,11 +145,17 @@
+ }
+ 
+ void NotificationManager::Dismiss(NotificationManager::Notification::Id id) {
+-  NotificationManager::Notification::Idx idx = this->IndexOf(id);
+-  if (idx == this->size) {
+-    return;
++  {
++    ListLock lock;
++    NotificationManager::Notification::Idx idx = this->IndexOf(id);
++    if (idx == this->size) {
++      return;
++    }
++    this->DismissIdx(idx);
++  }
++  if (dismissHook != nullptr) {
++    dismissHook(hookContext, id);
+   }
+-  this->DismissIdx(idx);
+ }
+ 
+ bool NotificationManager::AreNewNotificationsAvailable() const {
+@@ -129,6 +167,7 @@
+ }
+ 
+ size_t NotificationManager::NbNotifications() const {
++  ListLock lock;
+   return size;
+ }
+ 

@@ -1,0 +1,122 @@
+diff --git a/src/lv_core/lv_obj.c b/src/lv_core/lv_obj.c
+index 3acb9cb8..a01dc79e 100644
+--- a/src/lv_core/lv_obj.c
++++ b/src/lv_core/lv_obj.c
+@@ -2831,7 +2831,7 @@ lv_opa_t _lv_obj_get_style_opa(const lv_obj_t * obj, uint8_t part, lv_style_prop
+  *       For example: `lv_obj_style_get_border_opa()`
+  * @note for performance reasons it's not checked if the property really has pointer type
+  */
+-const void * _lv_obj_get_style_ptr(const lv_obj_t * obj, uint8_t part, lv_style_property_t prop)
++static const void * get_style_ptr_unguarded(const lv_obj_t * obj, uint8_t part, lv_style_property_t prop)
+ {
+     lv_style_property_t prop_ori = prop;
+ 
+@@ -2897,6 +2897,32 @@ const void * _lv_obj_get_style_ptr(const lv_obj_t * obj, uint8_t part, lv_style_
+     return NULL;
+ }
+ 
++/**
++ * Check a text or value font that a style lookup resolved, before it is used. This default
++ * accepts every font; an application can define its own (the InfiniTime HA overlay does, in
++ * ha_bridge/BootBox.cpp) to catch a pointer that is not a font and return a usable one.
++ * @param font the font the lookup resolved
++ * @param obj the object whose style was looked up
++ * @param part the part that was looked up
++ * @return the font to use
++ */
++__attribute__((weak)) const void * lv_font_guard(const void * font, const lv_obj_t * obj, uint8_t part)
++{
++    (void)obj;
++    (void)part;
++    return font;
++}
++
++const void * _lv_obj_get_style_ptr(const lv_obj_t * obj, uint8_t part, lv_style_property_t prop)
++{
++    const void * value = get_style_ptr_unguarded(obj, part, prop);
++    lv_style_property_t base = prop & (~LV_STYLE_STATE_MASK);
++    if(base == LV_STYLE_TEXT_FONT || base == LV_STYLE_VALUE_FONT) {
++        value = lv_font_guard(value, obj, part);
++    }
++    return value;
++}
++
+ /**
+  * Get the local style of a part of an object.
+  * @param obj pointer to an object
+diff --git a/src/lv_font/lv_font_fmt_txt.c b/src/lv_font/lv_font_fmt_txt.c
+index 1ea3212a..7e8291eb 100644
+--- a/src/lv_font/lv_font_fmt_txt.c
++++ b/src/lv_font/lv_font_fmt_txt.c
+@@ -19,6 +19,15 @@
+  *      DEFINES
+  *********************/
+ 
++/* get_glyph_dsc_id caches the last lookup (last_letter, last_glyph_id) in the font descriptor. A
++ * descriptor declared const is in flash, where the write is dropped, and on the nRF52832 the next
++ * read from the same 16-byte flash line can return a wrong value: the kerning pointer read right
++ * after the cache write came back non-NULL in a font with no kerning. Only a descriptor in RAM is
++ * written. */
++#ifndef LV_FONT_FMT_TXT_DSC_WRITABLE
++#define LV_FONT_FMT_TXT_DSC_WRITABLE(fdsc) ((lv_uintptr_t)(fdsc) >= 0x20000000u)
++#endif
++
+ /**********************
+  *      TYPEDEFS
+  **********************/
+@@ -244,13 +253,17 @@ static uint32_t get_glyph_dsc_id(const lv_font_t * font, uint32_t letter)
+         }
+ 
+         /*Update the cache*/
+-        fdsc->last_letter = letter;
+-        fdsc->last_glyph_id = glyph_id;
++        if(LV_FONT_FMT_TXT_DSC_WRITABLE(fdsc)) {
++            fdsc->last_letter = letter;
++            fdsc->last_glyph_id = glyph_id;
++        }
+         return glyph_id;
+     }
+ 
+-    fdsc->last_letter = letter;
+-    fdsc->last_glyph_id = 0;
++    if(LV_FONT_FMT_TXT_DSC_WRITABLE(fdsc)) {
++        fdsc->last_letter = letter;
++        fdsc->last_glyph_id = 0;
++    }
+     return 0;
+ 
+ }
+diff --git a/src/lv_widgets/lv_label.c b/src/lv_widgets/lv_label.c
+index 8c0a6c4b..5aa49d81 100644
+--- a/src/lv_widgets/lv_label.c
++++ b/src/lv_widgets/lv_label.c
+@@ -990,6 +990,21 @@ void lv_label_cut_text(lv_obj_t * label, uint32_t pos, uint32_t cnt)
+  * Refresh the label with its text stored in its extended data
+  * @param label pointer to a label object
+  */
++/**
++ * Called by lv_label_refr_text once it has the label's font, before it measures the text. This
++ * default does nothing; an application can define its own (the InfiniTime HA overlay does, in
++ * ha_bridge/BootBox.cpp) to record the label being measured.
++ * @param label the label
++ * @param text its text
++ * @param font the font its style resolved
++ */
++__attribute__((weak)) void lv_label_refr_hook(const lv_obj_t * label, const char * text, const void * font)
++{
++    (void)label;
++    (void)text;
++    (void)font;
++}
++
+ void lv_label_refr_text(lv_obj_t * label)
+ {
+     lv_label_ext_t * ext = lv_obj_get_ext_attr(label);
+@@ -1003,6 +1018,7 @@ void lv_label_refr_text(lv_obj_t * label)
+     get_txt_coords(label, &txt_coords);
+     lv_coord_t max_w         = lv_area_get_width(&txt_coords);
+     const lv_font_t * font   = lv_obj_get_style_text_font(label, LV_LABEL_PART_MAIN);
++    lv_label_refr_hook(label, ext->text, font);
+     lv_style_int_t line_space = lv_obj_get_style_text_line_space(label, LV_LABEL_PART_MAIN);
+     lv_style_int_t letter_space = lv_obj_get_style_text_letter_space(label, LV_LABEL_PART_MAIN);
+ 

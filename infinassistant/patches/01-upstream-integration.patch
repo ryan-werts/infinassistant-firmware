@@ -1,0 +1,971 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 84e3914e..1acd5dff 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
+ 
+ set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose Debug or Release")
+ 
+-project(pinetime VERSION 1.15.1 LANGUAGES C CXX ASM)
++project(pinetime VERSION 2.4.81 LANGUAGES C CXX ASM)
+ 
+ set(CMAKE_C_STANDARD 99)
+ set(CMAKE_CXX_STANDARD 20)
+@@ -15,6 +15,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+ set(NRF_TARGET "nrf52")
+ 
++
+ if (NOT ARM_NONE_EABI_TOOLCHAIN_PATH)
+   message(FATAL_ERROR "The path to the toolchain (arm-none-eabi) must be specified on the command line (add -DARM_NONE_EABI_TOOLCHAIN_PATH=<path>")
+ endif ()
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index e2da8820..09bd8885 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -380,7 +380,6 @@ list(APPEND SOURCE_FILES
+         displayapp/screens/Metronome.cpp
+         displayapp/screens/Motion.cpp
+         displayapp/screens/Weather.cpp
+-        displayapp/screens/HomeAssistant.cpp
+         displayapp/screens/Calculator.cpp
+         displayapp/screens/FirmwareValidation.cpp
+         displayapp/screens/ApplicationList.cpp
+@@ -460,7 +459,6 @@ list(APPEND SOURCE_FILES
+         components/ble/AlertNotificationService.cpp
+         components/ble/MusicService.cpp
+         components/ble/SimpleWeatherService.cpp
+-        components/ble/HomeAssistantService.cpp
+         components/ble/NavigationService.cpp
+         components/ble/BatteryInformationService.cpp
+         components/ble/FSService.cpp
+@@ -533,7 +531,6 @@ list(APPEND RECOVERY_SOURCE_FILES
+         components/ble/MusicService.cpp
+         components/ble/SimpleWeatherService.cpp
+         components/ble/BatteryInformationService.cpp
+-        components/ble/HomeAssistantService.cpp
+         components/ble/FSService.cpp
+         components/ble/ImmediateAlertService.cpp
+         components/ble/ServiceDiscovery.cpp
+@@ -867,6 +864,15 @@ target_compile_options(infinitime_fonts PUBLIC
+ 
+ add_subdirectory(displayapp/apps)
+ 
++# TinyCBOR library for Home Assistant Bridge
++add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../external/tinycbor ${CMAKE_CURRENT_BINARY_DIR}/tinycbor)
++target_compile_options(tinycbor PRIVATE
++  -mthumb -mabi=aapcs -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16
++  -ffunction-sections -fdata-sections -fno-strict-aliasing --specs=nano.specs)
++
++# Home Assistant Bridge
++add_subdirectory(ha_bridge)
++
+ # NRF SDK
+ add_library(nrf-sdk STATIC ${SDK_SOURCE_FILES})
+ target_include_directories(nrf-sdk SYSTEM PUBLIC . ../)
+@@ -921,7 +927,7 @@ set(EXECUTABLE_FILE_NAME ${EXECUTABLE_NAME}-${pinetime_VERSION_MAJOR}.${pinetime
+ set(NRF5_LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/gcc_nrf52.ld")
+ add_executable(${EXECUTABLE_NAME} ${SOURCE_FILES})
+ set_target_properties(${EXECUTABLE_NAME} PROPERTIES OUTPUT_NAME ${EXECUTABLE_FILE_NAME})
+-target_link_libraries(${EXECUTABLE_NAME} nimble nrf-sdk lvgl littlefs infinitime_fonts infinitime_apps)
++target_link_libraries(${EXECUTABLE_NAME} nimble nrf-sdk lvgl littlefs infinitime_fonts infinitime_apps ha_bridge)
+ target_compile_options(${EXECUTABLE_NAME} PUBLIC
+         ${COMMON_FLAGS}
+         ${WARNING_FLAGS}
+@@ -955,7 +961,7 @@ set(IMAGE_MCUBOOT_FILE_NAME_BIN ${EXECUTABLE_MCUBOOT_NAME}-image-${pinetime_VERS
+ set(DFU_MCUBOOT_FILE_NAME ${EXECUTABLE_MCUBOOT_NAME}-dfu-${pinetime_VERSION_MAJOR}.${pinetime_VERSION_MINOR}.${pinetime_VERSION_PATCH}.zip)
+ set(NRF5_LINKER_SCRIPT_MCUBOOT "${CMAKE_SOURCE_DIR}/gcc_nrf52-mcuboot.ld")
+ add_executable(${EXECUTABLE_MCUBOOT_NAME} ${SOURCE_FILES})
+-target_link_libraries(${EXECUTABLE_MCUBOOT_NAME} nimble nrf-sdk lvgl littlefs infinitime_fonts infinitime_apps)
++target_link_libraries(${EXECUTABLE_MCUBOOT_NAME} nimble nrf-sdk lvgl littlefs infinitime_fonts infinitime_apps ha_bridge)
+ set_target_properties(${EXECUTABLE_MCUBOOT_NAME} PROPERTIES OUTPUT_NAME ${EXECUTABLE_MCUBOOT_FILE_NAME})
+ target_compile_options(${EXECUTABLE_MCUBOOT_NAME} PUBLIC
+         ${COMMON_FLAGS}
+@@ -997,7 +1003,7 @@ endif()
+ set(EXECUTABLE_RECOVERY_NAME "pinetime-recovery")
+ set(EXECUTABLE_RECOVERY_FILE_NAME ${EXECUTABLE_RECOVERY_NAME}-${pinetime_VERSION_MAJOR}.${pinetime_VERSION_MINOR}.${pinetime_VERSION_PATCH})
+ add_executable(${EXECUTABLE_RECOVERY_NAME} ${RECOVERY_SOURCE_FILES})
+-target_link_libraries(${EXECUTABLE_RECOVERY_NAME} nimble nrf-sdk littlefs infinitime_fonts infinitime_apps)
++target_link_libraries(${EXECUTABLE_RECOVERY_NAME} nimble nrf-sdk littlefs infinitime_fonts infinitime_apps ha_bridge)
+ set_target_properties(${EXECUTABLE_RECOVERY_NAME} PROPERTIES OUTPUT_NAME ${EXECUTABLE_RECOVERY_FILE_NAME})
+ target_compile_definitions(${EXECUTABLE_RECOVERY_NAME} PUBLIC "PINETIME_IS_RECOVERY")
+ target_compile_options(${EXECUTABLE_RECOVERY_NAME} PUBLIC
+@@ -1029,7 +1035,7 @@ set(IMAGE_RECOVERY_MCUBOOT_FILE_NAME ${EXECUTABLE_RECOVERY_MCUBOOT_NAME}-image-$
+ set(IMAGE_RECOVERY_MCUBOOT_FILE_NAME_HEX ${IMAGE_RECOVERY_MCUBOOT_FILE_NAME}.hex)
+ set(DFU_RECOVERY_MCUBOOT_FILE_NAME ${EXECUTABLE_RECOVERY_MCUBOOT_NAME}-dfu-${pinetime_VERSION_MAJOR}.${pinetime_VERSION_MINOR}.${pinetime_VERSION_PATCH}.zip)
+ add_executable(${EXECUTABLE_RECOVERY_MCUBOOT_NAME} ${RECOVERY_SOURCE_FILES})
+-target_link_libraries(${EXECUTABLE_RECOVERY_MCUBOOT_NAME} nimble nrf-sdk littlefs infinitime_fonts infinitime_apps)
++target_link_libraries(${EXECUTABLE_RECOVERY_MCUBOOT_NAME} nimble nrf-sdk littlefs infinitime_fonts infinitime_apps ha_bridge)
+ set_target_properties(${EXECUTABLE_RECOVERY_MCUBOOT_NAME} PROPERTIES OUTPUT_NAME ${EXECUTABLE_RECOVERY_MCUBOOT_FILE_NAME})
+ target_compile_definitions(${EXECUTABLE_RECOVERY_MCUBOOT_NAME} PUBLIC "PINETIME_IS_RECOVERY")
+ target_compile_options(${EXECUTABLE_RECOVERY_MCUBOOT_NAME} PUBLIC
+@@ -1069,7 +1075,7 @@ endif()
+ set(EXECUTABLE_RECOVERYLOADER_NAME "pinetime-recovery-loader")
+ set(EXECUTABLE_RECOVERYLOADER_FILE_NAME ${EXECUTABLE_RECOVERYLOADER_NAME}-${pinetime_VERSION_MAJOR}.${pinetime_VERSION_MINOR}.${pinetime_VERSION_PATCH})
+ add_executable(${EXECUTABLE_RECOVERYLOADER_NAME} ${RECOVERYLOADER_SOURCE_FILES})
+-target_link_libraries(${EXECUTABLE_RECOVERYLOADER_NAME} nrf-sdk infinitime_fonts infinitime_apps)
++target_link_libraries(${EXECUTABLE_RECOVERYLOADER_NAME} nrf-sdk infinitime_fonts infinitime_apps ha_bridge)
+ set_target_properties(${EXECUTABLE_RECOVERYLOADER_NAME} PROPERTIES OUTPUT_NAME ${EXECUTABLE_RECOVERYLOADER_FILE_NAME})
+ target_compile_options(${EXECUTABLE_RECOVERYLOADER_NAME} PUBLIC
+         ${COMMON_FLAGS}
+@@ -1104,7 +1110,7 @@ set(IMAGE_MCUBOOT_RECOVERYLOADER_FILE_NAME ${EXECUTABLE_MCUBOOT_RECOVERYLOADER_N
+ set(IMAGE_MCUBOOT_RECOVERYLOADER_FILE_NAME_HEX ${IMAGE_MCUBOOT_RECOVERYLOADER_FILE_NAME}.hex)
+ set(DFU_MCUBOOT_RECOVERYLOADER_FILE_NAME ${EXECUTABLE_MCUBOOT_RECOVERYLOADER_NAME}-dfu-${pinetime_VERSION_MAJOR}.${pinetime_VERSION_MINOR}.${pinetime_VERSION_PATCH}.zip)
+ add_executable(${EXECUTABLE_MCUBOOT_RECOVERYLOADER_NAME} ${RECOVERYLOADER_SOURCE_FILES})
+-target_link_libraries(${EXECUTABLE_MCUBOOT_RECOVERYLOADER_NAME} nrf-sdk infinitime_fonts infinitime_apps)
++target_link_libraries(${EXECUTABLE_MCUBOOT_RECOVERYLOADER_NAME} nrf-sdk infinitime_fonts infinitime_apps ha_bridge)
+ set_target_properties(${EXECUTABLE_MCUBOOT_RECOVERYLOADER_NAME} PROPERTIES OUTPUT_NAME ${EXECUTABLE_MCUBOOT_RECOVERYLOADER_FILE_NAME})
+ target_compile_options(${EXECUTABLE_MCUBOOT_RECOVERYLOADER_NAME} PUBLIC
+         ${COMMON_FLAGS}
+diff --git a/src/FreeRTOSConfig.h b/src/FreeRTOSConfig.h
+index fce50054..2b930d2e 100644
+--- a/src/FreeRTOSConfig.h
++++ b/src/FreeRTOSConfig.h
+@@ -78,8 +78,8 @@
+ 
+ /* Hook function related definitions. */
+ #define configUSE_IDLE_HOOK            0
+-#define configUSE_TICK_HOOK            0
+-#define configCHECK_FOR_STACK_OVERFLOW 1
++#define configUSE_TICK_HOOK            1
++#define configCHECK_FOR_STACK_OVERFLOW     2
+ #define configUSE_MALLOC_FAILED_HOOK   1
+ 
+ /* Run time and task stats gathering related definitions. */
+@@ -95,7 +95,7 @@
+ #define configUSE_TIMERS             1
+ #define configTIMER_TASK_PRIORITY    (1)
+ #define configTIMER_QUEUE_LENGTH     32
+-#define configTIMER_TASK_STACK_DEPTH (300)
++#define configTIMER_TASK_STACK_DEPTH (470)
+ 
+ /* Tickless Idle configuration. */
+ #define configEXPECTED_IDLE_TIME_BEFORE_SLEEP 2
+diff --git a/src/components/ble/DfuService.cpp b/src/components/ble/DfuService.cpp
+index ad9c99e9..135b81fc 100644
+--- a/src/components/ble/DfuService.cpp
++++ b/src/components/ble/DfuService.cpp
+@@ -1,4 +1,5 @@
+ #include "components/ble/DfuService.h"
++#include "ha_bridge/BootConfirm.h"
+ #include <cstring>
+ #include "components/ble/BleController.h"
+ #include "components/ble/NotificationManager.h"
+@@ -133,6 +134,15 @@ int DfuService::WritePacketHandler(uint16_t connectionHandle, os_mbuf* om) {
+       bootloaderSize = om->om_data[4] + (om->om_data[5] << 8) + (om->om_data[6] << 16) + (om->om_data[7] << 24);
+       applicationSize = om->om_data[8] + (om->om_data[9] << 8) + (om->om_data[10] << 16) + (om->om_data[11] << 24);
+       bleController.FirmwareUpdateTotalBytes(applicationSize);
++
++      // A new image is about to be written to the secondary slot. Confirm the
++      // RUNNING image first, whatever state it is in: leaving it unconfirmed
++      // here is what lets MCUboot try to revert into a slot that is being
++      // overwritten, which corrupts the swap trailer (the 2.4.11-2.4.16
++      // failures in docs/howto/troubleshooting.md). Closing that one case is
++      // what makes it safe to keep rollback armed the rest of the time.
++      // See ha_bridge/BootConfirm.h.
++      Pinetime::Applications::HaBridge::BootConfirm::ConfirmBeforeDfu();
+       NRF_LOG_INFO("[DFU] -> Start data received : SD size : %d, BT size : %d, app size : %d",
+                    softdeviceSize,
+                    bootloaderSize,
+diff --git a/src/displayapp/Controllers.h b/src/displayapp/Controllers.h
+index 89441413..9c63fd67 100644
+--- a/src/displayapp/Controllers.h
++++ b/src/displayapp/Controllers.h
+@@ -29,6 +29,12 @@ namespace Pinetime {
+     class HomeAssistantService;
+   }
+ 
++  namespace Applications {
++    namespace HaBridge {
++      class BridgeController;
++    }
++  }
++
+   namespace System {
+     class SystemTask;
+   }
+@@ -54,7 +60,8 @@ namespace Pinetime {
+       Pinetime::Components::LittleVgl& lvgl;
+       Pinetime::Controllers::MusicService* musicService;
+       Pinetime::Controllers::NavigationService* navigationService;
+-      Pinetime::Controllers::HomeAssistantService* homeAssistantController;
++      Pinetime::Controllers::HomeAssistantService* homeAssistantController = nullptr;
++      Pinetime::Applications::HaBridge::BridgeController* bridgeController = nullptr;
+     };
+   }
+ }
+diff --git a/src/displayapp/DisplayApp.cpp b/src/displayapp/DisplayApp.cpp
+index aa3f0cbb..2ea56c0c 100644
+--- a/src/displayapp/DisplayApp.cpp
++++ b/src/displayapp/DisplayApp.cpp
+@@ -1,4 +1,5 @@
+ #include "displayapp/DisplayApp.h"
++#include "ha_bridge/BootConfirm.h"
+ #include <libraries/log/nrf_log.h>
+ #include "displayapp/screens/HeartRate.h"
+ #include "displayapp/screens/Motion.h"
+@@ -60,6 +61,75 @@
+ 
+ #include <algorithm>
+ #include <limits>
++#ifndef PINETIME_IS_RECOVERY
++#include <hal/nrf_gpio.h>
++#include <nrf_delay.h>
++#include "drivers/PinMap.h"
++#endif
++
++#ifndef PINETIME_IS_RECOVERY
++// Cleared after the first watch-face construction so the boot breadcrumbs in
++// LoadNewScreen(Apps::Clock) stay silent on every later screen change.
++static bool bootClockLoadPending = true;
++
++// The boot breadcrumb buzzes (BootBuzz 1, 2, 4, 5, 3) are off from 2.4.73: 15 motor pulses and
++// about 6.5 s of busy-wait on every boot, on the boot path that kept failing. The calls stay, so
++// they can be turned back on here. The watchdog that BootDelayFed used to feed on the way is fed
++// from the tick hook during start-up instead (ha_bridge/BootConfirm.cpp).
++static inline void BootBuzz(uint8_t /*pulses*/) {
++}
++#endif
++
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++// The boot black box's report (ha_bridge/BootBox.h): after a boot that ended badly, its record,
++// on the top layer over the watch face for the first minute. Nothing otherwise.
++namespace {
++  lv_obj_t* bootBoxLabel = nullptr;
++  TickType_t bootBoxUpdatedAt = 0;
++
++  void BootBoxShow() {
++    HaBootBoxPhase(1);
++    const char* report = HaBootBoxReport();
++    HaBootBoxPhase(0);
++    if (report == nullptr) {
++      return;
++    }
++    bootBoxLabel = lv_label_create(lv_layer_top(), nullptr);
++    lv_label_set_long_mode(bootBoxLabel, LV_LABEL_LONG_BREAK);
++    lv_obj_set_width(bootBoxLabel, LV_HOR_RES);
++    lv_obj_set_style_local_bg_color(bootBoxLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
++    lv_obj_set_style_local_bg_opa(bootBoxLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_OPA_COVER);
++    lv_obj_set_style_local_text_color(bootBoxLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
++    lv_label_set_text_static(bootBoxLabel, report);
++    lv_obj_set_pos(bootBoxLabel, 0, 0);
++    // Drawn now rather than at the first refresh, so a boot that dies while the watch face is
++    // built still shows the previous boot's record.
++    lv_refr_now(nullptr);
++    bootBoxUpdatedAt = xTaskGetTickCount();
++  }
++
++  void BootBoxRefresh() {
++    HaBootBoxDisplayTick();
++    if (bootBoxLabel == nullptr) {
++      return;
++    }
++    const TickType_t now = xTaskGetTickCount();
++    if (now - bootBoxUpdatedAt < configTICK_RATE_HZ) {
++      return;
++    }
++    bootBoxUpdatedAt = now;
++    if (now >= 60 * configTICK_RATE_HZ) {
++      lv_obj_del(bootBoxLabel);
++      bootBoxLabel = nullptr;
++      HaBootBoxReportDone();
++      return;
++    }
++    HaBootBoxPhase(1);
++    lv_label_set_text_static(bootBoxLabel, HaBootBoxReport());
++    HaBootBoxPhase(0);
++  }
++}
++#endif
+ 
+ using namespace Pinetime::Applications;
+ using namespace Pinetime::Applications::Display;
+@@ -145,7 +215,13 @@ void DisplayApp::Start(System::BootErrors error) {
+ void DisplayApp::Process(void* instance) {
+   auto* app = static_cast<DisplayApp*>(instance);
+   NRF_LOG_INFO("displayapp task started!");
++#ifndef PINETIME_IS_RECOVERY
++  BootBuzz(1);
++#endif
+   app->Init();
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++  BootBoxShow();
++#endif
+ 
+   if (app->bootError == System::BootErrors::TouchController) {
+     app->LoadNewScreen(Apps::Error, DisplayApp::FullRefreshDirections::None);
+@@ -153,6 +229,16 @@ void DisplayApp::Process(void* instance) {
+     app->LoadNewScreen(Apps::Clock, DisplayApp::FullRefreshDirections::None);
+   }
+ 
++#ifndef PINETIME_IS_RECOVERY
++  BootBuzz(3);
++#if HA_BOOT_BOX
++  HaBootBoxEvent(kHaBootEvFace);
++#endif
++  // Past LoadNewScreen: the watch face constructed and drew. This is the exact
++  // point the 2.4.41/2.4.42 boot loops never reached, so it is what the
++  // MCUboot confirmation waits on. See ha_bridge/BootConfirm.h.
++  Pinetime::Applications::HaBridge::BootConfirm::NotifyFirstScreenRendered();
++#endif
+   while (true) {
+     app->Refresh();
+   }
+@@ -164,6 +250,9 @@ void DisplayApp::Init() {
+   brightnessController.Init();
+   ApplyBrightness();
+   lvgl.Init();
++#ifndef PINETIME_IS_RECOVERY
++  BootBuzz(2);
++#endif
+ }
+ 
+ TickType_t DisplayApp::CalculateSleepTime() {
+@@ -203,6 +292,9 @@ TickType_t DisplayApp::CalculateSleepTime() {
+ }
+ 
+ void DisplayApp::Refresh() {
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++  BootBoxRefresh();
++#endif
+   auto LoadPreviousScreen = [this]() {
+     FullRefreshDirections returnDirection;
+     switch (appStackDirections.Pop()) {
+@@ -263,12 +355,21 @@ void DisplayApp::Refresh() {
+       if (!currentScreen->IsRunning()) {
+         LoadPreviousScreen();
+       }
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++      HaBootBoxPhase(2);
++#endif
+       queueTimeout = lv_task_handler();
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++      HaBootBoxPhase(0);
++#endif
+ 
+       if (!systemTask->IsSleepDisabled() && IsPastDimTime()) {
+         if (!isDimmed) {
+           isDimmed = true;
+           brightnessController.Set(Controllers::BrightnessController::Levels::Low);
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++          HaBootBoxEvent(kHaBootEvDim);
++#endif
+         }
+         if (IsPastSleepTime() && uxQueueMessagesWaiting(msgQueue) == 0) {
+           PushMessageToSystemTask(System::Messages::GoToSleep);
+@@ -340,6 +441,9 @@ void DisplayApp::Refresh() {
+           state = States::AOD;
+         } else {
+           lcd.Sleep();
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++          HaBootBoxEvent(kHaBootEvDisplayOff);
++#endif
+           PushMessageToSystemTask(Pinetime::System::Messages::OnDisplayTaskSleeping);
+           state = States::Idle;
+         }
+@@ -539,13 +643,28 @@ void DisplayApp::LoadScreen(Apps app, DisplayApp::FullRefreshDirections directio
+     } break;
+     case Apps::Clock: {
+       const auto* watchFace = std::ranges::find_if(userWatchFaces, [this](const WatchFaceDescription& watchfaceDescription) {
+-        return watchfaceDescription.watchFace == settingsController.GetWatchFace();
++        return watchfaceDescription.watchFace == settingsController.GetWatchFace() &&
++               watchfaceDescription.isAvailable(controllers.filesystem);
+       });
++#ifndef PINETIME_IS_RECOVERY
++      // 4 = the watch face is about to be constructed, 5 = it constructed.
++      // 2.4.51-2.4.55 all died between buzz 2 and buzz 3, which is this call and
++      // the first draw that follows it, and nothing else.
++      if (bootClockLoadPending) {
++        BootBuzz(4);
++      }
++#endif
+       if (watchFace != userWatchFaces.end()) {
+         currentScreen.reset(watchFace->create(controllers));
+       } else {
+         currentScreen.reset(userWatchFaces[0].create(controllers));
+       }
++#ifndef PINETIME_IS_RECOVERY
++      if (bootClockLoadPending) {
++        BootBuzz(5);
++        bootClockLoadPending = false;
++      }
++#endif
+       settingsController.SetAppMenu(0);
+     } break;
+     case Apps::Error:
+@@ -736,6 +855,10 @@ void DisplayApp::Register(Pinetime::Controllers::NavigationService* NavigationSe
+   this->controllers.navigationService = NavigationService;
+ }
+ 
++void DisplayApp::Register(Pinetime::Applications::HaBridge::BridgeController* bridge) {
++  this->controllers.bridgeController = bridge;
++}
++
+ void DisplayApp::ApplyBrightness() {
+   auto brightness = settingsController.GetBrightness();
+   if (brightness != Controllers::BrightnessController::Levels::Low && brightness != Controllers::BrightnessController::Levels::Medium &&
+diff --git a/src/displayapp/DisplayApp.h b/src/displayapp/DisplayApp.h
+index 220c475c..bdd6483c 100644
+--- a/src/displayapp/DisplayApp.h
++++ b/src/displayapp/DisplayApp.h
+@@ -41,6 +41,13 @@ namespace Pinetime {
+     class MotionController;
+     class TouchHandler;
+     class SimpleWeatherService;
++    class HomeAssistantService;
++  }
++
++  namespace Applications {
++    namespace HaBridge {
++      class BridgeController;
++    }
+   }
+ 
+   namespace System {
+@@ -79,9 +86,10 @@ namespace Pinetime {
+ 
+       void Register(Pinetime::System::SystemTask* systemTask);
+       void Register(Pinetime::Controllers::SimpleWeatherService* weatherService);
+-      void Register(Pinetime::Controllers::HomeAssistantService* homeAssistantService);
+       void Register(Pinetime::Controllers::MusicService* musicService);
+       void Register(Pinetime::Controllers::NavigationService* NavigationService);
++      void Register(Pinetime::Controllers::HomeAssistantService* haService);
++      void Register(Pinetime::Applications::HaBridge::BridgeController* bridge);
+ 
+     private:
+       Pinetime::Drivers::St7789& lcd;
+diff --git a/src/displayapp/UserApps.h b/src/displayapp/UserApps.h
+index 831f0e75..4af2fdee 100644
+--- a/src/displayapp/UserApps.h
++++ b/src/displayapp/UserApps.h
+@@ -8,6 +8,10 @@
+ #include "displayapp/screens/Twos.h"
+ #include "displayapp/screens/Tile.h"
+ #include "displayapp/screens/ApplicationList.h"
++#include "displayapp/screens/HomeAssistant.h"
++#include "displayapp/screens/HaLogbook.h"
++#include "displayapp/screens/HaCalendar.h"
++#include "displayapp/screens/HaHomeControl.h"
+ #include "displayapp/screens/WatchFaceDigital.h"
+ #include "displayapp/screens/WatchFaceAnalog.h"
+ #include "displayapp/screens/WatchFaceCasioStyleG7710.h"
+@@ -15,7 +19,6 @@
+ #include "displayapp/screens/WatchFacePineTimeStyle.h"
+ #include "displayapp/screens/WatchFaceTerminal.h"
+ #include "displayapp/screens/WatchFacePrideFlag.h"
+-#include "displayapp/screens/HomeAssistant.h"
+ 
+ namespace Pinetime {
+   namespace Applications {
+diff --git a/src/displayapp/apps/Apps.h.in b/src/displayapp/apps/Apps.h.in
+index 232fb92c..9d798d6c 100644
+--- a/src/displayapp/apps/Apps.h.in
++++ b/src/displayapp/apps/Apps.h.in
+@@ -31,6 +31,9 @@ namespace Pinetime {
+       Dice,
+       Weather,
+       HomeAssistant,
++      HaLogbook,
++      HaCalendar,
++      HaHomeControl,
+       PassKey,
+       QuickSettings,
+       Settings,
+@@ -57,6 +60,7 @@ namespace Pinetime {
+       Infineat,
+       CasioStyleG7710,
+       PrideFlag,
++      HomeAssistant,
+     };
+ 
+     template <Apps>
+diff --git a/src/displayapp/apps/CMakeLists.txt b/src/displayapp/apps/CMakeLists.txt
+index 881f3fe8..4e83465c 100644
+--- a/src/displayapp/apps/CMakeLists.txt
++++ b/src/displayapp/apps/CMakeLists.txt
+@@ -15,7 +15,9 @@ else ()
+     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Navigation")
+     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Calculator")
+     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Weather")
+-        set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::HomeAssistant")
++    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::HaLogbook")
++    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::HaCalendar")
++    set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::HaHomeControl")
+     #set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Motion")
+     set(USERAPP_TYPES "${DEFAULT_USER_APP_TYPES}" CACHE STRING "List of user apps to build into the firmware")
+ endif ()
+@@ -24,12 +26,8 @@ if(DEFINED ENABLE_WATCHFACES)
+     set(WATCHFACE_TYPES ${ENABLE_WATCHFACES} CACHE STRING "List of watch faces to build into the firmware")
+ else()
+     set(DEFAULT_WATCHFACE_TYPES "WatchFace::Digital")
+-    set(DEFAULT_WATCHFACE_TYPES "${DEFAULT_WATCHFACE_TYPES}, WatchFace::Analog")
+-    set(DEFAULT_WATCHFACE_TYPES "${DEFAULT_WATCHFACE_TYPES}, WatchFace::PineTimeStyle")
+-    set(DEFAULT_WATCHFACE_TYPES "${DEFAULT_WATCHFACE_TYPES}, WatchFace::Terminal")
+-    set(DEFAULT_WATCHFACE_TYPES "${DEFAULT_WATCHFACE_TYPES}, WatchFace::Infineat")
+     set(DEFAULT_WATCHFACE_TYPES "${DEFAULT_WATCHFACE_TYPES}, WatchFace::CasioStyleG7710")
+-    set(DEFAULT_WATCHFACE_TYPES "${DEFAULT_WATCHFACE_TYPES}, WatchFace::PrideFlag")
++    set(DEFAULT_WATCHFACE_TYPES "${DEFAULT_WATCHFACE_TYPES}, WatchFace::HomeAssistant")
+     set(WATCHFACE_TYPES "${DEFAULT_WATCHFACE_TYPES}" CACHE STRING "List of watch faces to build into the firmware")
+ endif()
+ 
+diff --git a/src/libs/lv_conf.h b/src/libs/lv_conf.h
+index c23647f2..44ec835f 100644
+--- a/src/libs/lv_conf.h
++++ b/src/libs/lv_conf.h
+@@ -377,9 +377,9 @@ typedef void* lv_indev_drv_user_data_t;            /*Type of user data in the in
+ #define LV_FONT_MONTSERRAT_8     0
+ #define LV_FONT_MONTSERRAT_10    0
+ #define LV_FONT_MONTSERRAT_12    0
+-#define LV_FONT_MONTSERRAT_14    0
++#define LV_FONT_MONTSERRAT_14    1
+ #define LV_FONT_MONTSERRAT_16    0
+-#define LV_FONT_MONTSERRAT_18    0
++#define LV_FONT_MONTSERRAT_18    1
+ #define LV_FONT_MONTSERRAT_20    0
+ #define LV_FONT_MONTSERRAT_22    0
+ #define LV_FONT_MONTSERRAT_24    0
+diff --git a/src/main.cpp b/src/main.cpp
+index d0ab3e48..b80652d4 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -28,6 +28,7 @@
+ #include <drivers/Bma421.h>
+ 
+ #include "BootloaderVersion.h"
++#include "ha_bridge/BootBox.h"
+ #include "components/battery/BatteryController.h"
+ #include "components/ble/BleController.h"
+ #include "components/ble/NotificationManager.h"
+@@ -149,16 +150,25 @@ Pinetime::System::SystemTask systemTask(spi,
+                                         heartRateApp,
+                                         fs,
+                                         touchHandler,
+-                                        buttonHandler);
++                                        buttonHandler,
++                                        motorController);
+ int mallocFailedCount = 0;
+ int stackOverflowCount = 0;
+ extern "C" {
+ void vApplicationMallocFailedHook() {
+   mallocFailedCount++;
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++  HaBootBoxMallocFailed();
++#endif
+ }
+ 
+-void vApplicationStackOverflowHook(TaskHandle_t /*xTask*/, char* /*pcTaskName*/) {
++void vApplicationStackOverflowHook(TaskHandle_t /*xTask*/, char* pcTaskName) {
+   stackOverflowCount++;
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++  HaBootBoxStackOverflow(pcTaskName);
++#else
++  (void) pcTaskName;
++#endif
+ }
+ }
+ /* Variable Declarations for variables in noinit SRAM
+@@ -230,9 +240,13 @@ void RTC0_IRQHandler(void) {
+   ((void (*)()) rtc0_isr_addr)();
+ }
+ 
++#if !(HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY))
++// With the boot black box, its own handler records where the watchdog fired
++// (ha_bridge/BootBox.cpp).
+ void WDT_IRQHandler(void) {
+   nrf_wdt_event_clear(NRF_WDT_EVENT_TIMEOUT);
+ }
++#endif
+ 
+ void npl_freertos_hw_set_isr(int irqn, void (*addr)()) {
+   switch (irqn) {
+@@ -309,6 +323,7 @@ void calibrate_lf_clock_rc(nrf_drv_clock_evt_type_t /*event*/) {
+   nrf_drv_clock_calibration_start(16, calibrate_lf_clock_rc);
+ }
+ 
++
+ void enable_dcdc_regulator() {
+   NRF_POWER->DCDCEN = 1;
+ }
+@@ -360,6 +375,11 @@ int main() {
+     NoInit_MagicWord = NoInit_MagicValue;
+   }
+ 
++#if HA_BOOT_BOX && !defined(PINETIME_IS_RECOVERY)
++  // The boot black box: keep the previous boot's record when it ended badly and start this
++  // boot's. See ha_bridge/BootBox.h.
++  HaBootBoxBegin();
++#endif
+   systemTask.Start();
+ 
+   nimble_port_init();
+diff --git a/src/systemtask/SystemTask.cpp b/src/systemtask/SystemTask.cpp
+index 211f2ace..06dccd59 100644
+--- a/src/systemtask/SystemTask.cpp
++++ b/src/systemtask/SystemTask.cpp
+@@ -1,4 +1,23 @@
++#include "components/motor/MotorController.h"
++#include <hal/nrf_gpio.h>
++#include <nrf_delay.h>
+ #include "systemtask/SystemTask.h"
++#include "ha_bridge/BootConfirm.h"
++
++#if !defined(PINETIME_IS_RECOVERY) && HA_BOOT_TRACE
++// Diagnostic (2.4.72): SystemTask start-up stage. See ha_bridge/BootConfirm.h.
++#define HA_INIT_STAGE(n) Pinetime::Applications::HaBridge::BootConfirm::MarkInitStage(n)
++#elif !defined(PINETIME_IS_RECOVERY) && HA_BOOT_BOX
++// Diagnostic (2.4.82): the boot black box keeps the furthest stage. See ha_bridge/BootBox.h.
++#define HA_INIT_STAGE(n) HaBootBoxStage(n)
++#else
++#define HA_INIT_STAGE(n) do {} while (0)
++#endif
++#if !defined(PINETIME_IS_RECOVERY) && HA_BOOT_BOX
++#define HA_BOOT_EVENT(e) HaBootBoxEvent(e)
++#else
++#define HA_BOOT_EVENT(e) do {} while (0)
++#endif
+ #include <hal/nrf_rtc.h>
+ #include <libraries/gpiote/app_gpiote.h>
+ #include <libraries/log/nrf_log.h>
+@@ -52,7 +71,8 @@ SystemTask::SystemTask(Drivers::SpiMaster& spi,
+                        Pinetime::Applications::HeartRateTask& heartRateApp,
+                        Pinetime::Controllers::FS& fs,
+                        Pinetime::Controllers::TouchHandler& touchHandler,
+-                       Pinetime::Controllers::ButtonHandler& buttonHandler)
++                       Pinetime::Controllers::ButtonHandler& buttonHandler,
++                       Pinetime::Controllers::MotorController& motorController)
+   : spi {spi},
+     spiNorFlash {spiNorFlash},
+     twiMaster {twiMaster},
+@@ -82,12 +102,28 @@ SystemTask::SystemTask(Drivers::SpiMaster& spi,
+                      spiNorFlash,
+                      heartRateController,
+                      motionController,
+-                     fs) {
++                     fs),
++    motorController_ {motorController}
++#ifndef PINETIME_IS_RECOVERY
++    ,bridgeController(nimbleController.homeAssistant(),
++                     motionController,
++                     heartRateController,
++                     batteryController,
++                     &motorController_,
++                     &dateTimeController,
++                     &watchdog)
++#endif
++    {
+ }
+ 
+ void SystemTask::Start() {
+   systemTasksMsgQueue = xQueueCreate(10, 1);
+-  if (pdPASS != xTaskCreate(SystemTask::Process, "MAIN", 350, this, 1, &taskHandle)) {
++  // 600 words, up from 350: the overlay runs the bridge's start-up and littlefs writes on this
++  // task. Its deepest start-up path (a littlefs commit that splits or relocates) needs about
++  // 1600 B and the ordinary ones about 1400 B, before an interrupt stacks its frame here, so
++  // 1400 B overflowed into the heap block below the stack, silently: the overflow hook only
++  // counts.
++  if (pdPASS != xTaskCreate(SystemTask::Process, "MAIN", 600, this, 1, &taskHandle)) {
+     APP_ERROR_HANDLER(NRF_ERROR_NO_MEM);
+   }
+ }
+@@ -104,6 +140,12 @@ void SystemTask::Work() {
+   watchdog.Setup(7, Drivers::Watchdog::SleepBehaviour::Run, Drivers::Watchdog::HaltBehaviour::Pause);
+   watchdog.Start();
+   NRF_LOG_INFO("Last reset reason : %s", Pinetime::Drivers::ResetReasonToString(watchdog.GetResetReason()));
++  // Diagnostic (2.4.72): keep the previous boot's crash record before this boot's
++  // start-up stages write to it. See ha_bridge/BootConfirm.h.
++#ifndef PINETIME_IS_RECOVERY
++  bridgeController.CaptureEarly();
++#endif
++  HA_INIT_STAGE(1);
+   if (!nrfx_gpiote_is_init()) {
+     nrfx_gpiote_init();
+   }
+@@ -111,10 +153,13 @@ void SystemTask::Work() {
+   spi.Init();
+   spiNorFlash.Init();
+   spiNorFlash.Wakeup();
++  HA_INIT_STAGE(2);
+ 
+   fs.Init();
++  HA_INIT_STAGE(3);
+ 
+   nimbleController.Init();
++  HA_INIT_STAGE(4);
+ 
+   twiMaster.Init();
+   /*
+@@ -137,18 +182,29 @@ void SystemTask::Work() {
+ 
+   motionSensor.Init();
+   motionController.Init(motionSensor.DeviceType());
++  HA_INIT_STAGE(5);
+   settingsController.Init();
++  HA_INIT_STAGE(6);
+ 
++#ifndef PINETIME_IS_RECOVERY
++  bridgeController.Init();
++#endif
++  HA_INIT_STAGE(7);
+   displayApp.Register(this);
+   displayApp.Register(&nimbleController.weather());
+   displayApp.Register(&nimbleController.music());
+   displayApp.Register(&nimbleController.navigation());
+   displayApp.Register(&nimbleController.homeAssistant());
++#ifndef PINETIME_IS_RECOVERY
++  displayApp.Register(&bridgeController);
++#endif
+   displayApp.Start(bootError);
++  HA_INIT_STAGE(8);
+ 
+   heartRateSensor.Init();
+   heartRateSensor.Disable();
+   heartRateApp.Start();
++  HA_INIT_STAGE(9);
+ 
+   buttonHandler.Init(this);
+ 
+@@ -177,11 +233,13 @@ void SystemTask::Work() {
+   pinConfig.pull = NRF_GPIO_PIN_NOPULL;
+   nrfx_gpiote_in_init(PinMap::PowerPresent, &pinConfig, nrfx_gpiote_evt_handler);
+   nrfx_gpiote_in_event_enable(PinMap::PowerPresent, true);
++  HA_INIT_STAGE(10);
+ 
+   batteryController.MeasureVoltage();
+ 
+   measureBatteryTimer = xTimerCreate("measureBattery", batteryMeasurementPeriod, pdTRUE, this, MeasureBatteryTimerCallback);
+   xTimerStart(measureBatteryTimer, portMAX_DELAY);
++  HA_INIT_STAGE(11);
+ 
+   constexpr TickType_t stateUpdatePeriod = pdMS_TO_TICKS(100);
+   // Stores when the state (motion, watchdog, time persistence etc) was last updated
+@@ -197,6 +255,19 @@ void SystemTask::Work() {
+   while (true) {
+     Messages msg;
+ 
++    // Confirm the MCUboot image once this boot has proven itself: the first
++    // watch face rendered AND we have been up long enough. Until then the
++    // image stays unconfirmed so the bootloader can still revert it.
++    // See ha_bridge/BootConfirm.h.
++#ifndef PINETIME_IS_RECOVERY
++    Pinetime::Applications::HaBridge::BootConfirm::ConfirmIfHealthy();
++#endif
++    HA_INIT_STAGE(12);
++#if !defined(PINETIME_IS_RECOVERY) && HA_BOOT_BOX
++    HaBootBoxLoop(batteryController.Voltage(),
++                  static_cast<uint8_t>((batteryController.IsCharging() ? 1u : 0u) | (batteryController.IsPowerPresent() ? 2u : 0u)));
++#endif
++
+     elapsed = xTaskGetTickCount() - lastStateUpdate;
+     TickType_t waitTime;
+     if (elapsed >= stateUpdatePeriod) {
+@@ -332,6 +403,7 @@ void SystemTask::Work() {
+           } else {
+             state = SystemTaskState::AODSleeping;
+           }
++          HA_BOOT_EVENT(kHaBootEvSleeping);
+           break;
+         case Messages::OnNewDay:
+           motionSensor.ResetStepCounter();
+@@ -428,6 +500,7 @@ void SystemTask::GoToRunning() {
+   }
+ 
+   state = SystemTaskState::Running;
++  HA_BOOT_EVENT(kHaBootEvWake);
+ };
+ 
+ void SystemTask::GoToSleep() {
+@@ -446,6 +519,7 @@ void SystemTask::GoToSleep() {
+   heartRateApp.PushMessage(Pinetime::Applications::HeartRateTask::Messages::GoToSleep);
+ 
+   state = SystemTaskState::GoingToSleep;
++  HA_BOOT_EVENT(kHaBootEvSleepReq);
+ };
+ 
+ void SystemTask::UpdateMotion() {
+diff --git a/src/systemtask/SystemTask.h b/src/systemtask/SystemTask.h
+index 606ddd34..b0101e6c 100644
+--- a/src/systemtask/SystemTask.h
++++ b/src/systemtask/SystemTask.h
+@@ -11,9 +11,13 @@
+ #include <drivers/Bma421.h>
+ #include <drivers/PinMap.h>
+ #include <components/motion/MotionController.h>
++#include "components/motor/MotorController.h"
+ 
+ #include "systemtask/SystemMonitor.h"
+ #include "components/ble/NimbleController.h"
++#ifndef PINETIME_IS_RECOVERY
++#include "ha_bridge/BridgeController.h"
++#endif
+ #include "components/ble/NotificationManager.h"
+ #include "components/stopwatch/StopWatchController.h"
+ #include "components/alarm/AlarmController.h"
+@@ -74,7 +78,8 @@ namespace Pinetime {
+                  Pinetime::Applications::HeartRateTask& heartRateApp,
+                  Pinetime::Controllers::FS& fs,
+                  Pinetime::Controllers::TouchHandler& touchHandler,
+-                 Pinetime::Controllers::ButtonHandler& buttonHandler);
++                 Pinetime::Controllers::ButtonHandler& buttonHandler,
++                 Pinetime::Controllers::MotorController& motorController);
+ 
+       void Start();
+       void PushMessage(Messages msg);
+@@ -127,6 +132,10 @@ namespace Pinetime {
+       Pinetime::Controllers::TouchHandler& touchHandler;
+       Pinetime::Controllers::ButtonHandler& buttonHandler;
+       Pinetime::Controllers::NimbleController nimbleController;
++      Pinetime::Controllers::MotorController& motorController_;
++#ifndef PINETIME_IS_RECOVERY
++      Pinetime::Applications::HaBridge::BridgeController bridgeController;
++#endif
+ 
+       static void Process(void* instance);
+       void Work();
+diff --git a/src/FreeRTOS/heap_4_infinitime.c b/src/FreeRTOS/heap_4_infinitime.c
+index bf649254..d0bd1ecd 100644
+--- a/src/FreeRTOS/heap_4_infinitime.c
++++ b/src/FreeRTOS/heap_4_infinitime.c
+@@ -106,6 +106,9 @@ static size_t xBlockAllocatedBit = 0;
+ 
+ static size_t xHeapSize = 0;
+ 
++/* The first block, for ulPortHeapCheck. */
++static uint8_t *pucFirstBlock = NULL;
++
+ /*-----------------------------------------------------------*/
+ 
+ void *pvPortMalloc( size_t xWantedSize )
+@@ -313,6 +316,91 @@ void vPortFree( void *pv )
+ }
+ /*-----------------------------------------------------------*/
+ 
++/* Walks every block from the start of the heap, then the free list. Returns 0 when both are
++consistent, or the heap is not set up yet; otherwise the address of the first block header found
++wrong, with pulInfo[0..3] = its two words, the previous block's address and that block's size word.
++A block that overran its end corrupts the header after it, so the previous block is the suspect.
++xSuspend: 0 only where nothing else can run (a fault handler). */
++uint32_t ulPortHeapCheck( uint32_t *pulInfo, int xSuspend )
++{
++ BlockLink_t *pxBad = NULL;
++ BlockLink_t *pxPrevious = NULL;
++ size_t xFreeBlocks = 0;
++
++ if( pxEnd == NULL || pucFirstBlock == NULL )
++ {
++   return 0;
++ }
++ if( xSuspend != 0 )
++ {
++   vTaskSuspendAll();
++ }
++ {
++   uint8_t *puc = pucFirstBlock;
++   while( puc < ( uint8_t * ) pxEnd )
++   {
++     BlockLink_t *pxBlock = ( BlockLink_t * ) puc;
++     size_t xSize = pxBlock->xBlockSize & ~xBlockAllocatedBit;
++     int xAllocated = ( pxBlock->xBlockSize & xBlockAllocatedBit ) != 0;
++     if( ( xSize < heapMINIMUM_BLOCK_SIZE ) || ( ( xSize & portBYTE_ALIGNMENT_MASK ) != 0 ) ||
++         ( xSize > ( size_t ) ( ( uint8_t * ) pxEnd - puc ) ) || ( xAllocated && ( pxBlock->pxNextFreeBlock != NULL ) ) )
++     {
++       pxBad = pxBlock;
++       break;
++     }
++     if( !xAllocated )
++     {
++       xFreeBlocks++;
++     }
++     pxPrevious = pxBlock;
++     puc += xSize;
++   }
++   if( ( pxBad == NULL ) && ( puc != ( uint8_t * ) pxEnd ) )
++   {
++     pxBad = ( BlockLink_t * ) puc;
++   }
++ }
++ if( pxBad == NULL )
++ {
++   /* Every free-list node must be one of the free blocks just walked, in address order. */
++   BlockLink_t *pxIterator = xStart.pxNextFreeBlock;
++   BlockLink_t *pxLast = NULL;
++   size_t xNodes = 0;
++   while( pxIterator != pxEnd )
++   {
++     if( ( ( uint8_t * ) pxIterator < pucFirstBlock ) || ( pxIterator > pxEnd ) ||
++         ( ( ( size_t ) pxIterator & portBYTE_ALIGNMENT_MASK ) != 0 ) ||
++         ( ( pxIterator->xBlockSize & xBlockAllocatedBit ) != 0 ) ||
++         ( ( pxLast != NULL ) && ( pxIterator <= pxLast ) ) || ( ++xNodes > xFreeBlocks ) )
++     {
++       pxBad = pxIterator;
++       pxPrevious = pxLast;
++       break;
++     }
++     pxLast = pxIterator;
++     pxIterator = pxIterator->pxNextFreeBlock;
++   }
++   if( ( pxBad == NULL ) && ( xNodes != xFreeBlocks ) )
++   {
++     pxBad = ( pxLast != NULL ) ? pxLast : ( BlockLink_t * ) pucFirstBlock;
++   }
++ }
++ if( ( pxBad != NULL ) && ( pulInfo != NULL ) )
++ {
++   int xReadable = ( ( uint8_t * ) pxBad >= pucFirstBlock ) && ( pxBad <= pxEnd );
++   pulInfo[ 0 ] = xReadable ? ( uint32_t ) pxBad->pxNextFreeBlock : 0;
++   pulInfo[ 1 ] = xReadable ? ( uint32_t ) pxBad->xBlockSize : 0;
++   pulInfo[ 2 ] = ( uint32_t ) pxPrevious;
++   pulInfo[ 3 ] = ( pxPrevious != NULL ) ? ( uint32_t ) pxPrevious->xBlockSize : 0;
++ }
++ if( xSuspend != 0 )
++ {
++   ( void ) xTaskResumeAll();
++ }
++ return ( uint32_t ) pxBad;
++}
++/*-----------------------------------------------------------*/
++
+ size_t xPortGetFreeHeapSize( void )
+ {
+  return xFreeBytesRemaining;
+@@ -360,6 +448,24 @@ static void prvHeapInit( void )
+  }
+ 
+  pucAlignedHeap = ( uint8_t * ) uxAddress;
++ pucFirstBlock = pucAlignedHeap;
++
++ /* Start every boot from a zeroed heap. The heap is the RAM above .noinit, which nothing clears
++ at start-up: memory read before it is written would otherwise hold whatever the previous
++ firmware or the bootloader's image swap left there. Clamped below the current stack in case
++ the main stack has grown into the heap region. */
++ {
++   uint8_t ucStackMarker;
++   uint8_t *pucZeroEnd = pucAlignedHeap + xTotalHeapSize;
++   if( ( &ucStackMarker > pucAlignedHeap ) && ( &ucStackMarker < pucZeroEnd ) )
++   {
++     pucZeroEnd = &ucStackMarker - 64;
++   }
++   if( pucZeroEnd > pucAlignedHeap )
++   {
++     memset( pucAlignedHeap, 0, ( size_t ) ( pucZeroEnd - pucAlignedHeap ) );
++   }
++ }
+ 
+  /* xStart is used to hold a pointer to the first item in the list of free
+  blocks.  The void cast is used to prevent compiler warnings. */
+diff --git a/src/components/firmwarevalidator/FirmwareValidator.cpp b/src/components/firmwarevalidator/FirmwareValidator.cpp
+index 5a63b6b4..bababab1 100644
+--- a/src/components/firmwarevalidator/FirmwareValidator.cpp
++++ b/src/components/firmwarevalidator/FirmwareValidator.cpp
+@@ -6,7 +6,11 @@
+ using namespace Pinetime::Controllers;
+ 
+ bool FirmwareValidator::IsValidated() const {
+-  auto* imageOkPtr = reinterpret_cast<uint32_t*>(validBitAdress);
++  // MCUboot sets image_ok as one byte, 0x01, padded with the erased value to its write
++  // alignment, so after a permanent install or a revert the word reads 0xFFFFFF01. Compared as
++  // a whole word it never matched, and the image took every such boot for a test boot and wrote
++  // image_ok again. Compare the flag byte, as MCUboot does (little-endian: the word's low byte).
++  auto* imageOkPtr = reinterpret_cast<const volatile uint8_t*>(validBitAdress);
+   return (*imageOkPtr) == validBitValue;
+ }
+ 

@@ -1,0 +1,189 @@
+name: InfinAssistant firmware
+
+# Builds the firmware on every push and pull request. A plain version tag (for example 2.4.103) that
+# equals the project version in CMakeLists.txt also publishes a GitHub Release with the DFU zip and its
+# sha256 in the notes. The release zip is this workflow's build of the tag, so the image embeds the
+# public commit hash (git rev-parse --short HEAD, read by the top-level CMakeLists.txt).
+#
+# Build container: the image upstream InfiniTime's own CI uses (infinitime/infinitime-build, from
+# docker/Dockerfile at upstream 7dea64af), pinned by digest. Its toolchain is GNU Arm 10.3-2021.10
+# and nRF5 SDK 15.3.0_59ac345, the versions tools/firmware/release.sh builds with. The `latest` tag
+# moved to GCC 15.3 after that commit, so do not use it. To move the pin, resolve the new digest from
+# the registry (tag manifest, Docker-Content-Digest header) and check /opt/build.sh in the image.
+#
+# No cache of any kind: the release asset always comes from a clean build.
+#
+# Upstream's own workflows in .github/workflows/ are left as they are.
+
+on:
+  push:
+    branches: ['**']
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GCC_ARM_DIR: /opt/gcc-arm-none-eabi-10.3-2021.10
+  NRF5_SDK_DIR: /opt/nRF5_SDK_15.3.0_59ac345
+  LV_FONT_CONV_VERSION: 1.5.3
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    container:
+      # infinitime/infinitime-build:sha-957ba59 (index digest, linux/amd64 and linux/arm64)
+      image: infinitime/infinitime-build@sha256:42f3d966d95032ee3700a013273ed52d90827a28f5c9bea680f17950d9c8205f
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out the sources and submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Read the project version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # git inside the container refuses a workspace owned by another user, and CMake runs
+          # `git rev-parse --short HEAD` for the hash the image embeds.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          ver=$(sed -n 's/^project(pinetime VERSION \([0-9.]*\) LANGUAGES C CXX ASM)$/\1/p' CMakeLists.txt)
+          if ! [[ $ver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::cannot read the project version from CMakeLists.txt (got '$ver')"
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Tag must equal the project version
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::tag '$TAG' is not the project version '$VERSION' in CMakeLists.txt"
+            exit 1
+          fi
+
+      # The image carries lv_font_conv 1.5.2 (npm -g). The font build in tools/firmware/release.sh runs
+      # 1.5.3, so install that one outside the workspace and put it first on PATH. The version and its
+      # integrity hash come from the committed package.json and package-lock.json in
+      # .github/lv-font-conv/; npm ci installs exactly that and runs no install scripts.
+      - name: Install lv_font_conv
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/lvfc"
+          cp .github/lv-font-conv/package.json .github/lv-font-conv/package-lock.json "$RUNNER_TEMP/lvfc/"
+          (cd "$RUNNER_TEMP/lvfc" && npm ci --ignore-scripts)
+          echo "$RUNNER_TEMP/lvfc/node_modules/.bin" >> "$GITHUB_PATH"
+          got=$("$RUNNER_TEMP/lvfc/node_modules/.bin/lv_font_conv" --version)
+          if [ "$got" != "$LV_FONT_CONV_VERSION" ]; then
+            echo "::error::lv_font_conv is $got, expected $LV_FONT_CONV_VERSION"
+            exit 1
+          fi
+
+      - name: Configure and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # As release.sh does: the release commit's time fixes __DATE__ and __TIME__ in GCC.
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
+          # Record the tool versions in the log.
+          command -v lv_font_conv
+          "$GCC_ARM_DIR/bin/arm-none-eabi-gcc" --version | head -1
+          mkdir build
+          cd build
+          cmake -G "Unix Makefiles" \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake-nRF5x/arm-gcc-toolchain-fixed.cmake" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DARM_NONE_EABI_TOOLCHAIN_PATH="$GCC_ARM_DIR" \
+            -DNRF5_SDK_PATH="$NRF5_SDK_DIR" \
+            -DBUILD_DFU=1 -DBUILD_RESOURCES=0 -DTARGET_DEVICE=PINETIME ..
+          make pinetime-mcuboot-app -j"$(nproc)"
+
+      - name: Package the DFU zip
+        id: package
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir dist
+          cd build/src
+          # The same line as release.sh: the zip is made from the mcuboot image .bin.
+          adafruit-nrfutil dfu genpkg --dev-type 0x0052 \
+            --application "pinetime-mcuboot-app-image-$VERSION.bin" \
+            "pinetime-mcuboot-app-dfu-$VERSION.zip"
+          cp "pinetime-mcuboot-app-dfu-$VERSION.zip" "$GITHUB_WORKSPACE/dist/"
+          cd "$GITHUB_WORKSPACE/dist"
+          sha256sum "pinetime-mcuboot-app-dfu-$VERSION.zip" | tee SHA256SUMS
+          {
+            echo "### DFU zip"
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the DFU zip
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: infinassistant-dfu
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish the GitHub Release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download the DFU zip
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: infinassistant-dfu
+          path: dist
+
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::tag '$TAG' is not the project version '$VERSION'"
+            exit 1
+          fi
+          cd dist
+          zip="pinetime-mcuboot-app-dfu-$VERSION.zip"
+          sha256sum --check SHA256SUMS
+          sha=$(sha256sum "$zip" | cut -d' ' -f1)
+          {
+            echo "InfinAssistant firmware $VERSION, built by this repository's CI from commit $COMMIT."
+            echo
+            echo "DFU package: \`$zip\`"
+            echo
+            echo "sha256: \`$sha\`"
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" "$zip" \
+            --verify-tag \
+            --title "InfinAssistant firmware $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md"

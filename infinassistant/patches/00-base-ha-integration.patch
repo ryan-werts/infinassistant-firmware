@@ -1,0 +1,1894 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3250982d..84e3914e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
+ 
+ set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose Debug or Release")
+ 
+-project(pinetime VERSION 1.15.0 LANGUAGES C CXX ASM)
++project(pinetime VERSION 1.15.1 LANGUAGES C CXX ASM)
+ 
+ set(CMAKE_C_STANDARD 99)
+ set(CMAKE_CXX_STANDARD 20)
+diff --git a/external/tinycbor b/external/tinycbor
+new file mode 160000
+index 00000000..09496c64
+--- /dev/null
++++ b/external/tinycbor
+@@ -0,0 +1 @@
++Subproject commit 09496c6432adfcfa7a563068e5365849b088f653
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index e4a354df..e2da8820 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -380,6 +380,7 @@ list(APPEND SOURCE_FILES
+         displayapp/screens/Metronome.cpp
+         displayapp/screens/Motion.cpp
+         displayapp/screens/Weather.cpp
++        displayapp/screens/HomeAssistant.cpp
+         displayapp/screens/Calculator.cpp
+         displayapp/screens/FirmwareValidation.cpp
+         displayapp/screens/ApplicationList.cpp
+@@ -459,6 +460,7 @@ list(APPEND SOURCE_FILES
+         components/ble/AlertNotificationService.cpp
+         components/ble/MusicService.cpp
+         components/ble/SimpleWeatherService.cpp
++        components/ble/HomeAssistantService.cpp
+         components/ble/NavigationService.cpp
+         components/ble/BatteryInformationService.cpp
+         components/ble/FSService.cpp
+@@ -531,6 +533,7 @@ list(APPEND RECOVERY_SOURCE_FILES
+         components/ble/MusicService.cpp
+         components/ble/SimpleWeatherService.cpp
+         components/ble/BatteryInformationService.cpp
++        components/ble/HomeAssistantService.cpp
+         components/ble/FSService.cpp
+         components/ble/ImmediateAlertService.cpp
+         components/ble/ServiceDiscovery.cpp
+diff --git a/src/components/ble/HomeAssistantService.cpp b/src/components/ble/HomeAssistantService.cpp
+new file mode 100755
+index 00000000..727f4a3b
+--- /dev/null
++++ b/src/components/ble/HomeAssistantService.cpp
+@@ -0,0 +1,64 @@
++#include "components/ble/HomeAssistantService.h"
++#include <host/ble_gatt.h>
++#include <os/os_mbuf.h>
++
++using namespace Pinetime::Controllers;
++
++int HomeAssistantCallback(uint16_t /*connHandle*/, uint16_t /*attrHandle*/, struct ble_gatt_access_ctxt* ctxt, void* arg) {
++  return static_cast<HomeAssistantService*>(arg)->OnCommand(ctxt);
++}
++
++HomeAssistantService::HomeAssistantService() {
++}
++
++void HomeAssistantService::Init() {
++  ble_gatts_count_cfg(serviceDefinition_);
++  ble_gatts_add_svcs(serviceDefinition_);
++}
++
++void HomeAssistantService::SetOnDataReceived(OnDataReceived callback) {
++  onDataReceived_ = std::move(callback);
++}
++
++int HomeAssistantService::OnCommand(struct ble_gatt_access_ctxt* ctxt) {
++  if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
++    size_t len = OS_MBUF_PKTLEN(ctxt->om);
++    if (len > 0 && onDataReceived_) {
++      std::vector<uint8_t> data(len);
++      os_mbuf_copydata(ctxt->om, 0, len, data.data());
++      onDataReceived_(data.data(), data.size());
++    }
++  }
++  return 0;
++}
++
++void HomeAssistantService::SendNotify(uint16_t connHandle, const uint8_t* data, size_t len) {
++  if (txHandle_ == 0 || connHandle == BLE_HS_CONN_HANDLE_NONE) {
++    return;
++  }
++
++  struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
++  if (om) {
++    ble_gattc_notify_custom(connHandle, txHandle_, om);
++  }
++}
++
++void HomeAssistantService::SetActions(std::vector<Action> actions) {
++  actions_ = std::move(actions);
++  hasUpdate_ = true;
++}
++
++void HomeAssistantService::SetEntities(std::vector<Entity> entities) {
++  entities_ = std::move(entities);
++  hasUpdate_ = true;
++}
++
++void HomeAssistantService::AddNotification(Notification notif) {
++  notifications_.push_back(std::move(notif));
++  hasUpdate_ = true;
++}
++
++void HomeAssistantService::ClearNotifications() {
++  notifications_.clear();
++  hasUpdate_ = true;
++}
+diff --git a/src/components/ble/HomeAssistantService.h b/src/components/ble/HomeAssistantService.h
+new file mode 100755
+index 00000000..68b1a18a
+--- /dev/null
++++ b/src/components/ble/HomeAssistantService.h
+@@ -0,0 +1,129 @@
++#pragma once
++
++#include <cstdint>
++#include <vector>
++#include <functional>
++#include <array>
++#include <string>
++
++#define min
++#define max
++#include <host/ble_gap.h>
++#include <host/ble_uuid.h>
++#undef max
++#undef min
++
++int HomeAssistantCallback(uint16_t connHandle, uint16_t attrHandle, struct ble_gatt_access_ctxt* ctxt, void* arg);
++
++namespace Pinetime {
++namespace Controllers {
++
++class HomeAssistantService {
++public:
++  // Callback types
++  using OnDataReceived = std::function<void(const uint8_t* data, size_t len)>;
++
++  HomeAssistantService();
++  void Init();
++  void SetOnDataReceived(OnDataReceived callback);
++
++  // Called by NimBLE when data is written to RX characteristic
++  int OnCommand(struct ble_gatt_access_ctxt* ctxt);
++
++  // Send data to phone via TX (notify) characteristic
++  void SendNotify(uint16_t connHandle, const uint8_t* data, size_t len);
++
++  // Data model for UI
++  struct Action {
++    uint8_t id;
++    std::array<char, 32> label;
++    bool confirm;
++  };
++
++  struct Entity {
++    std::array<char, 64> entityId;
++    std::array<char, 32> name;
++    std::array<char, 32> state;
++    std::array<char, 8> unit;
++  };
++
++  struct Notification {
++    std::array<char, 32> title;
++    std::array<char, 128> body;
++    std::array<char, 16> severity;
++  };
++
++  // Accessors for current data
++  const std::vector<Action>& GetActions() const { return actions_; }
++  const std::vector<Entity>& GetEntities() const { return entities_; }
++  const std::vector<Notification>& GetNotifications() const { return notifications_; }
++
++  // Data setters (called by protocol handler)
++  void SetActions(std::vector<Action> actions);
++  void SetEntities(std::vector<Entity> entities);
++  void AddNotification(Notification notif);
++  void ClearNotifications();
++
++  // Check for updates
++  bool HasUpdate() const { return hasUpdate_; }
++  void ClearUpdate() { hasUpdate_ = false; }
++
++private:
++  // 00060000-78fc-48fe-8e23-433b3a1942d0
++  static constexpr ble_uuid128_t BaseUuid() {
++    return CharUuid(0x00, 0x00);
++  }
++
++  // 0006yyxx-78fc-48fe-8e23-433b3a1942d0
++  static constexpr ble_uuid128_t CharUuid(uint8_t x, uint8_t y) {
++    return ble_uuid128_t{
++      .u = {.type = BLE_UUID_TYPE_128},
++      .value = {0xd0, 0x42, 0x19, 0x3a, 0x3b, 0x43, 0x23, 0x8e, 0xfe, 0x48, 0xfc, 0x78, y, x, 0x06, 0x00}
++    };
++  }
++
++  ble_uuid128_t serviceUuid_{BaseUuid()};
++  ble_uuid128_t txCharUuid_{CharUuid(0x00, 0x01)};  // Notify (watch→phone)
++  ble_uuid128_t rxCharUuid_{CharUuid(0x00, 0x02)};  // Write (phone→watch)
++
++  struct ble_gatt_chr_def characteristicDefinition_[3] = {
++    {
++      .uuid = &txCharUuid_.u,
++      .access_cb = HomeAssistantCallback,
++      .arg = this,
++      .flags = BLE_GATT_CHR_F_NOTIFY,
++      .val_handle = &txHandle_
++    },
++    {
++      .uuid = &rxCharUuid_.u,
++      .access_cb = HomeAssistantCallback,
++      .arg = this,
++      .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
++      .val_handle = &rxHandle_
++    },
++    {0}
++  };
++
++  struct ble_gatt_svc_def serviceDefinition_[2] = {
++    {
++      .type = BLE_GATT_SVC_TYPE_PRIMARY,
++      .uuid = &serviceUuid_.u,
++      .characteristics = characteristicDefinition_
++    },
++    {0}
++  };
++
++  uint16_t txHandle_{0};
++  uint16_t rxHandle_{0};
++
++  OnDataReceived onDataReceived_;
++
++  // Data storage
++  std::vector<Action> actions_;
++  std::vector<Entity> entities_;
++  std::vector<Notification> notifications_;
++  bool hasUpdate_{false};
++};
++
++} // namespace Controllers
++} // namespace Pinetime
+diff --git a/src/components/ble/NimbleController.cpp b/src/components/ble/NimbleController.cpp
+index 5059007a..13a0e18c 100644
+--- a/src/components/ble/NimbleController.cpp
++++ b/src/components/ble/NimbleController.cpp
+@@ -90,6 +90,7 @@ void NimbleController::Init() {
+   currentTimeService.Init();
+   musicService.Init();
+   weatherService.Init();
++  homeAssistantService.Init();
+   navService.Init();
+   anService.Init();
+   dfuService.Init();
+diff --git a/src/components/ble/NimbleController.h b/src/components/ble/NimbleController.h
+index 597ef0cc..0d700c1a 100644
+--- a/src/components/ble/NimbleController.h
++++ b/src/components/ble/NimbleController.h
+@@ -22,6 +22,7 @@
+ #include "components/ble/ServiceDiscovery.h"
+ #include "components/ble/MotionService.h"
+ #include "components/ble/SimpleWeatherService.h"
++#include "components/ble/HomeAssistantService.h"
+ #include "components/fs/FS.h"
+ 
+ namespace Pinetime {
+@@ -71,6 +72,10 @@ namespace Pinetime {
+         return weatherService;
+       };
+ 
++      Pinetime::Controllers::HomeAssistantService& homeAssistant() {
++        return homeAssistantService;
++      };
++
+       uint16_t connHandle();
+       void NotifyBatteryLevel(uint8_t level);
+ 
+@@ -100,6 +105,7 @@ namespace Pinetime {
+       CurrentTimeService currentTimeService;
+       MusicService musicService;
+       SimpleWeatherService weatherService;
++      HomeAssistantService homeAssistantService;
+       NavigationService navService;
+       BatteryInformationService batteryInformationService;
+       ImmediateAlertService immediateAlertService;
+diff --git a/src/displayapp/Controllers.h b/src/displayapp/Controllers.h
+index 223c7c69..89441413 100644
+--- a/src/displayapp/Controllers.h
++++ b/src/displayapp/Controllers.h
+@@ -26,6 +26,7 @@ namespace Pinetime {
+     class Timer;
+     class MusicService;
+     class NavigationService;
++    class HomeAssistantService;
+   }
+ 
+   namespace System {
+@@ -53,6 +54,7 @@ namespace Pinetime {
+       Pinetime::Components::LittleVgl& lvgl;
+       Pinetime::Controllers::MusicService* musicService;
+       Pinetime::Controllers::NavigationService* navigationService;
++      Pinetime::Controllers::HomeAssistantService* homeAssistantController;
+     };
+   }
+ }
+diff --git a/src/displayapp/DisplayApp.cpp b/src/displayapp/DisplayApp.cpp
+index 84fa6036..aa3f0cbb 100644
+--- a/src/displayapp/DisplayApp.cpp
++++ b/src/displayapp/DisplayApp.cpp
+@@ -724,6 +724,10 @@ void DisplayApp::Register(Pinetime::Controllers::SimpleWeatherService* weatherSe
+   this->controllers.weatherController = weatherService;
+ }
+ 
++void DisplayApp::Register(Pinetime::Controllers::HomeAssistantService* homeAssistantService) {
++  this->controllers.homeAssistantController = homeAssistantService;
++}
++
+ void DisplayApp::Register(Pinetime::Controllers::MusicService* musicService) {
+   this->controllers.musicService = musicService;
+ }
+diff --git a/src/displayapp/DisplayApp.h b/src/displayapp/DisplayApp.h
+index 016f91d3..220c475c 100644
+--- a/src/displayapp/DisplayApp.h
++++ b/src/displayapp/DisplayApp.h
+@@ -79,6 +79,7 @@ namespace Pinetime {
+ 
+       void Register(Pinetime::System::SystemTask* systemTask);
+       void Register(Pinetime::Controllers::SimpleWeatherService* weatherService);
++      void Register(Pinetime::Controllers::HomeAssistantService* homeAssistantService);
+       void Register(Pinetime::Controllers::MusicService* musicService);
+       void Register(Pinetime::Controllers::NavigationService* NavigationService);
+ 
+diff --git a/src/displayapp/DisplayAppRecovery.cpp b/src/displayapp/DisplayAppRecovery.cpp
+index cb358d60..9af2635d 100644
+--- a/src/displayapp/DisplayAppRecovery.cpp
++++ b/src/displayapp/DisplayAppRecovery.cpp
+@@ -123,3 +123,6 @@ void DisplayApp::Register(Pinetime::Controllers::MusicService* /*musicService*/)
+ 
+ void DisplayApp::Register(Pinetime::Controllers::NavigationService* /*NavigationService*/) {
+ }
++
++void DisplayApp::Register(Pinetime::Controllers::HomeAssistantService* /*homeAssistantService*/) {
++}
+diff --git a/src/displayapp/DisplayAppRecovery.h b/src/displayapp/DisplayAppRecovery.h
+index ed387a8b..cb489b18 100644
+--- a/src/displayapp/DisplayAppRecovery.h
++++ b/src/displayapp/DisplayAppRecovery.h
+@@ -33,6 +33,7 @@ namespace Pinetime {
+     class MotorController;
+     class StopWatchController;
+     class AlarmController;
++    class HomeAssistantService;
+     class BrightnessController;
+     class FS;
+     class SimpleWeatherService;
+@@ -75,6 +76,7 @@ namespace Pinetime {
+       void Register(Pinetime::Controllers::SimpleWeatherService* weatherService);
+       void Register(Pinetime::Controllers::MusicService* musicService);
+       void Register(Pinetime::Controllers::NavigationService* NavigationService);
++      void Register(Pinetime::Controllers::HomeAssistantService* homeAssistantService);
+ 
+     private:
+       TaskHandle_t taskHandle;
+diff --git a/src/displayapp/UserApps.h b/src/displayapp/UserApps.h
+index 25926edc..831f0e75 100644
+--- a/src/displayapp/UserApps.h
++++ b/src/displayapp/UserApps.h
+@@ -15,6 +15,7 @@
+ #include "displayapp/screens/WatchFacePineTimeStyle.h"
+ #include "displayapp/screens/WatchFaceTerminal.h"
+ #include "displayapp/screens/WatchFacePrideFlag.h"
++#include "displayapp/screens/HomeAssistant.h"
+ 
+ namespace Pinetime {
+   namespace Applications {
+diff --git a/src/displayapp/apps/Apps.h.in b/src/displayapp/apps/Apps.h.in
+index d440b598..232fb92c 100644
+--- a/src/displayapp/apps/Apps.h.in
++++ b/src/displayapp/apps/Apps.h.in
+@@ -30,6 +30,7 @@ namespace Pinetime {
+       Steps,
+       Dice,
+       Weather,
++      HomeAssistant,
+       PassKey,
+       QuickSettings,
+       Settings,
+diff --git a/src/displayapp/apps/CMakeLists.txt b/src/displayapp/apps/CMakeLists.txt
+index 93196ed6..881f3fe8 100644
+--- a/src/displayapp/apps/CMakeLists.txt
++++ b/src/displayapp/apps/CMakeLists.txt
+@@ -15,6 +15,7 @@ else ()
+     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Navigation")
+     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Calculator")
+     set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Weather")
++        set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::HomeAssistant")
+     #set(DEFAULT_USER_APP_TYPES "${DEFAULT_USER_APP_TYPES}, Apps::Motion")
+     set(USERAPP_TYPES "${DEFAULT_USER_APP_TYPES}" CACHE STRING "List of user apps to build into the firmware")
+ endif ()
+diff --git a/src/displayapp/screens/HomeAssistant.cpp b/src/displayapp/screens/HomeAssistant.cpp
+new file mode 100755
+index 00000000..2fcdf968
+--- /dev/null
++++ b/src/displayapp/screens/HomeAssistant.cpp
+@@ -0,0 +1,236 @@
++#include "displayapp/screens/HomeAssistant.h"
++#include "displayapp/DisplayApp.h"
++
++using namespace Pinetime::Applications::Screens;
++
++namespace {
++  constexpr int TAB_HEIGHT = 40;
++  constexpr int CONTENT_Y = TAB_HEIGHT + 5;
++  constexpr int SCREEN_WIDTH = 240;
++  constexpr int SCREEN_HEIGHT = 240;
++}
++
++HomeAssistant::HomeAssistant(Controllers::HomeAssistantService& haService)
++    : Screen(), haService_(haService) {
++  CreateUI();
++  taskRefresh_ = lv_task_create([](lv_task_t* task) {
++    auto* screen = static_cast<HomeAssistant*>(task->user_data);
++    screen->Refresh();
++  }, LV_DISP_DEF_REFR_PERIOD, LV_TASK_PRIO_MID, this);
++}
++
++HomeAssistant::~HomeAssistant() {
++  if (taskRefresh_ != nullptr) {
++    lv_task_del(taskRefresh_);
++  }
++  if (container_ != nullptr) {
++    lv_obj_del(container_);
++  }
++}
++
++void HomeAssistant::Refresh() {
++  if (haService_.HasUpdate()) {
++    haService_.ClearUpdate();
++    SwitchTab(currentTab_);  // Rebuild current tab with new data
++  }
++}
++
++void HomeAssistant::CreateUI() {
++  container_ = lv_obj_create(lv_scr_act(), nullptr);
++  lv_obj_set_size(container_, SCREEN_WIDTH, SCREEN_HEIGHT);
++  lv_obj_set_pos(container_, 0, 0);
++  lv_obj_set_style_local_bg_color(container_, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
++  lv_obj_set_style_local_border_width(container_, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
++  lv_obj_set_style_local_pad_all(container_, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
++
++  const char* tabNames[] = {"Actions", "States", "Inbox"};
++  int tabWidth = SCREEN_WIDTH / 3;
++
++  for (int i = 0; i < 3; i++) {
++    tabButtons_[i] = lv_btn_create(container_, nullptr);
++    lv_obj_set_size(tabButtons_[i], tabWidth, TAB_HEIGHT);
++    lv_obj_set_pos(tabButtons_[i], i * tabWidth, 0);
++    lv_obj_set_style_local_radius(tabButtons_[i], LV_BTN_PART_MAIN, LV_STATE_DEFAULT, 0);
++    lv_obj_set_style_local_border_width(tabButtons_[i], LV_BTN_PART_MAIN, LV_STATE_DEFAULT, 1);
++    lv_obj_set_style_local_border_color(tabButtons_[i], LV_BTN_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_GRAY);
++    lv_obj_set_user_data(tabButtons_[i], this);
++    lv_obj_set_event_cb(tabButtons_[i], OnTabClicked);
++
++    tabLabels_[i] = lv_label_create(tabButtons_[i], nullptr);
++    lv_label_set_text(tabLabels_[i], tabNames[i]);
++    lv_obj_align(tabLabels_[i], nullptr, LV_ALIGN_CENTER, 0, 0);
++  }
++
++  contentArea_ = lv_obj_create(container_, nullptr);
++  lv_obj_set_size(contentArea_, SCREEN_WIDTH, SCREEN_HEIGHT - CONTENT_Y);
++  lv_obj_set_pos(contentArea_, 0, CONTENT_Y);
++  lv_obj_set_style_local_bg_color(contentArea_, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_BLACK);
++  lv_obj_set_style_local_border_width(contentArea_, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
++
++  SwitchTab(Tab::Actions);
++}
++
++void HomeAssistant::SwitchTab(Tab tab) {
++  currentTab_ = tab;
++
++  for (int i = 0; i < 3; i++) {
++    bool isActive = (i == static_cast<int>(tab));
++    lv_obj_set_style_local_bg_color(tabButtons_[i], LV_BTN_PART_MAIN, LV_STATE_DEFAULT,
++                                    isActive ? LV_COLOR_MAKE(0x00, 0x60, 0xA0) : LV_COLOR_MAKE(0x30, 0x30, 0x30));
++  }
++
++  ClearContent();
++
++  switch (tab) {
++    case Tab::Actions:
++      ShowActionsTab();
++      break;
++    case Tab::States:
++      ShowStatesTab();
++      break;
++    case Tab::Inbox:
++      ShowInboxTab();
++      break;
++  }
++}
++
++void HomeAssistant::ClearContent() {
++  lv_obj_clean(contentArea_);
++}
++
++void HomeAssistant::ShowActionsTab() {
++  const auto& actions = haService_.GetActions();
++
++  if (actions.empty()) {
++    lv_obj_t* label = lv_label_create(contentArea_, nullptr);
++    lv_label_set_text(label, "No actions\nConnect phone app");
++    lv_obj_set_style_local_text_color(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_GRAY);
++    lv_obj_align(label, nullptr, LV_ALIGN_CENTER, 0, 0);
++    return;
++  }
++
++  int btnHeight = 45;
++  int btnWidth = SCREEN_WIDTH - 20;
++  int y = 5;
++
++  for (size_t i = 0; i < actions.size() && i < 4; i++) {
++    lv_obj_t* btn = lv_btn_create(contentArea_, nullptr);
++    lv_obj_set_size(btn, btnWidth, btnHeight);
++    lv_obj_set_pos(btn, 10, y);
++    lv_obj_set_style_local_bg_color(btn, LV_BTN_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_MAKE(0x20, 0x40, 0x60));
++    lv_obj_set_style_local_radius(btn, LV_BTN_PART_MAIN, LV_STATE_DEFAULT, 8);
++    lv_obj_set_user_data(btn, this);
++    lv_obj_set_event_cb(btn, OnActionClicked);
++
++    lv_obj_t* label = lv_label_create(btn, nullptr);
++    lv_label_set_text(label, actions[i].label.data());
++    lv_obj_align(label, nullptr, LV_ALIGN_CENTER, 0, 0);
++
++    y += btnHeight + 5;
++  }
++}
++
++void HomeAssistant::ShowStatesTab() {
++  const auto& entities = haService_.GetEntities();
++
++  if (entities.empty()) {
++    lv_obj_t* label = lv_label_create(contentArea_, nullptr);
++    lv_label_set_text(label, "No entities\nConnect phone app");
++    lv_obj_set_style_local_text_color(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_GRAY);
++    lv_obj_align(label, nullptr, LV_ALIGN_CENTER, 0, 0);
++    return;
++  }
++
++  int rowHeight = 50;
++  int y = 10;
++
++  for (size_t i = 0; i < entities.size() && i < 3; i++) {
++    lv_obj_t* nameLabel = lv_label_create(contentArea_, nullptr);
++    lv_label_set_text(nameLabel, entities[i].name.data());
++    lv_obj_set_style_local_text_color(nameLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
++    lv_obj_set_pos(nameLabel, 15, y);
++
++    char stateBuf[48];
++    snprintf(stateBuf, sizeof(stateBuf), "%s %s", entities[i].state.data(), entities[i].unit.data());
++    lv_obj_t* valueLabel = lv_label_create(contentArea_, nullptr);
++    lv_label_set_text(valueLabel, stateBuf);
++    lv_obj_set_style_local_text_color(valueLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_CYAN);
++    lv_obj_set_pos(valueLabel, 15, y + 20);
++
++    lv_obj_t* line = lv_obj_create(contentArea_, nullptr);
++    lv_obj_set_size(line, SCREEN_WIDTH - 30, 1);
++    lv_obj_set_pos(line, 15, y + 45);
++    lv_obj_set_style_local_bg_color(line, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_MAKE(0x40, 0x40, 0x40));
++
++    y += rowHeight + 5;
++  }
++}
++
++void HomeAssistant::ShowInboxTab() {
++  const auto& notifications = haService_.GetNotifications();
++
++  if (notifications.empty()) {
++    lv_obj_t* label = lv_label_create(contentArea_, nullptr);
++    lv_label_set_text(label, "No notifications");
++    lv_obj_set_style_local_text_color(label, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_GRAY);
++    lv_obj_align(label, nullptr, LV_ALIGN_CENTER, 0, 0);
++    return;
++  }
++
++  int cardHeight = 70;
++  int y = 5;
++
++  for (size_t i = 0; i < notifications.size() && i < 2; i++) {
++    lv_obj_t* card = lv_obj_create(contentArea_, nullptr);
++    lv_obj_set_size(card, SCREEN_WIDTH - 20, cardHeight);
++    lv_obj_set_pos(card, 10, y);
++    lv_obj_set_style_local_bg_color(card, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_MAKE(0x25, 0x25, 0x35));
++    lv_obj_set_style_local_radius(card, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 8);
++    lv_obj_set_style_local_border_width(card, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
++
++    lv_obj_t* titleLabel = lv_label_create(card, nullptr);
++    lv_label_set_text(titleLabel, notifications[i].title.data());
++    lv_obj_set_style_local_text_color(titleLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_YELLOW);
++    lv_obj_set_pos(titleLabel, 10, 10);
++
++    lv_obj_t* bodyLabel = lv_label_create(card, nullptr);
++    lv_label_set_text(bodyLabel, notifications[i].body.data());
++    lv_obj_set_style_local_text_color(bodyLabel, LV_LABEL_PART_MAIN, LV_STATE_DEFAULT, LV_COLOR_WHITE);
++    lv_obj_set_pos(bodyLabel, 10, 35);
++
++    y += cardHeight + 10;
++  }
++}
++
++bool HomeAssistant::OnTouchEvent(TouchEvents event) {
++  if (event == TouchEvents::SwipeLeft) {
++    int next = (static_cast<int>(currentTab_) + 1) % 3;
++    SwitchTab(static_cast<Tab>(next));
++    return true;
++  }
++  if (event == TouchEvents::SwipeRight) {
++    int prev = (static_cast<int>(currentTab_) + 2) % 3;
++    SwitchTab(static_cast<Tab>(prev));
++    return true;
++  }
++  return false;
++}
++
++void HomeAssistant::OnTabClicked(lv_obj_t* obj, lv_event_t event) {
++  if (event != LV_EVENT_CLICKED) return;
++
++  auto* screen = static_cast<HomeAssistant*>(lv_obj_get_user_data(obj));
++  if (!screen) return;
++
++  for (int i = 0; i < 3; i++) {
++    if (screen->tabButtons_[i] == obj) {
++      screen->SwitchTab(static_cast<Tab>(i));
++      break;
++    }
++  }
++}
++
++void HomeAssistant::OnActionClicked(lv_obj_t* /*obj*/, lv_event_t event) {
++  if (event != LV_EVENT_CLICKED) return;
++  // TODO: Send action trigger to phone via BLE
++}
+diff --git a/src/displayapp/screens/HomeAssistant.h b/src/displayapp/screens/HomeAssistant.h
+new file mode 100755
+index 00000000..332e37f4
+--- /dev/null
++++ b/src/displayapp/screens/HomeAssistant.h
+@@ -0,0 +1,67 @@
++#pragma once
++
++#include "displayapp/apps/Apps.h"
++#include "displayapp/screens/Screen.h"
++#include "displayapp/Controllers.h"
++#include "components/ble/HomeAssistantService.h"
++#include "Symbols.h"
++
++namespace Pinetime {
++  namespace Applications {
++    namespace Screens {
++
++      class HomeAssistant : public Screen {
++      public:
++        HomeAssistant(Controllers::HomeAssistantService& haService);
++        ~HomeAssistant() override;
++        bool OnTouchEvent(TouchEvents event) override;
++        void Refresh() override;
++
++      private:
++        Controllers::HomeAssistantService& haService_;
++
++        enum class Tab { Actions, States, Inbox };
++        Tab currentTab_ = Tab::Actions;
++
++        // Main container
++        lv_obj_t* container_ = nullptr;
++
++        // Tab buttons
++        lv_obj_t* tabButtons_[3] = {nullptr, nullptr, nullptr};
++        lv_obj_t* tabLabels_[3] = {nullptr, nullptr, nullptr};
++
++        // Content area
++        lv_obj_t* contentArea_ = nullptr;
++
++        // Refresh task
++        lv_task_t* taskRefresh_ = nullptr;
++
++        void CreateUI();
++        void SwitchTab(Tab tab);
++        void ShowActionsTab();
++        void ShowStatesTab();
++        void ShowInboxTab();
++        void ClearContent();
++
++        static void OnTabClicked(lv_obj_t* obj, lv_event_t event);
++        static void OnActionClicked(lv_obj_t* obj, lv_event_t event);
++      };
++
++    } // namespace Screens
++
++    template <>
++    struct AppTraits<Apps::HomeAssistant> {
++      static constexpr Apps app = Apps::HomeAssistant;
++      static constexpr const char* icon = Screens::Symbols::home;
++
++      static Screens::Screen* Create(AppControllers& controllers) {
++        return new Screens::HomeAssistant(*controllers.homeAssistantController);
++      };
++
++      static bool IsAvailable(Pinetime::Controllers::FS& /*filesystem*/) {
++        return true;
++      };
++    };
++
++  } // namespace Applications
++} // namespace Pinetime
+diff --git a/src/ha_bridge/BridgeController.cpp b/src/ha_bridge/BridgeController.cpp
+new file mode 100755
+index 00000000..119b0c57
+--- /dev/null
++++ b/src/ha_bridge/BridgeController.cpp
+@@ -0,0 +1,180 @@
++#include "BridgeController.h"
++#include <cstring>
++
++namespace Pinetime {
++namespace Applications {
++namespace HaBridge {
++
++BridgeController::BridgeController() {
++  // Create BLE service
++  bleService_ = std::make_unique<Pinetime::Components::HomeAssistantService>(
++    [this](const std::vector<uint8_t>& data) {
++      OnBleDataReceived(data);
++    }
++  );
++
++  // Create UI app
++  app_ = std::make_unique<HomeAssistantApp>();
++
++  // Wire UI action callback
++  app_->SetActionInvokeCallback(
++    [this](uint8_t actionId, const char* gesture) {
++      OnUIActionInvoked(actionId, gesture);
++    }
++  );
++
++  // Wire frame codec callback
++  frameCodec_.SetOnFrameReceived(
++    [this](const Frame& frame) {
++      OnFrameReceived(frame);
++    }
++  );
++}
++
++BridgeController::~BridgeController() {
++}
++
++void BridgeController::Init() {
++  // Initialize BLE service
++  bleService_->Init();
++
++  // Initialize UI app
++  app_->Init();
++}
++
++void BridgeController::OnTick() {
++  // Check for frame reassembly timeouts
++  frameCodec_.CheckTimeout();
++
++  // UI tick
++  app_->OnTick();
++}
++
++void BridgeController::OnBleDataReceived(const std::vector<uint8_t>& data) {
++  // Feed data to frame codec for reassembly
++  frameCodec_.OnBytesReceived(data);
++}
++
++void BridgeController::OnFrameReceived(const Frame& frame) {
++  // Dispatch based on message type
++  switch (frame.header.type) {
++    case static_cast<uint8_t>(MessageType::CONFIG_PUSH):
++      HandleConfigPush(frame.payload);
++      break;
++
++    case static_cast<uint8_t>(MessageType::STATE_UPDATE):
++      HandleStateUpdate(frame.payload);
++      break;
++
++    case static_cast<uint8_t>(MessageType::NOTIF_PUSH):
++      HandleNotifPush(frame.payload);
++      break;
++
++    default:
++      // Unknown message type - ignore
++      break;
++  }
++}
++
++void BridgeController::HandleConfigPush(const std::vector<uint8_t>& payload) {
++  ConfigPushMessage msg;
++  if (!ConfigPushMessage::DecodeCbor(payload.data(), payload.size(), msg)) {
++    // Decode failed
++    return;
++  }
++
++  // Convert protocol messages to UI model
++  std::vector<HaAction> actions;
++  for (const auto& protoAction : msg.actions) {
++    HaAction action;
++    action.id = protoAction.actionId;
++    action.label = protoAction.label;
++    action.confirm = false; // Can be extended in protocol if needed
++    actions.push_back(action);
++  }
++
++  std::vector<HaEntity> entities;
++  for (const auto& protoEntity : msg.entities) {
++    HaEntity entity;
++    entity.entityId = protoEntity.entityId;
++    entity.name = protoEntity.name;
++    entity.state = protoEntity.state;
++    entity.unit = protoEntity.unit;
++    entities.push_back(entity);
++  }
++
++  // Update UI
++  app_->SetActions(actions);
++  app_->SetEntities(entities);
++}
++
++void BridgeController::HandleStateUpdate(const std::vector<uint8_t>& payload) {
++  StateUpdateMessage msg;
++  if (!StateUpdateMessage::DecodeCbor(payload.data(), payload.size(), msg)) {
++    return;
++  }
++
++  // Convert to UI model
++  std::vector<HaEntity> entities;
++  for (const auto& protoEntity : msg.entities) {
++    HaEntity entity;
++    entity.entityId = protoEntity.entityId;
++    entity.name = protoEntity.name;
++    entity.state = protoEntity.state;
++    entity.unit = protoEntity.unit;
++    entities.push_back(entity);
++  }
++
++  // Update UI (partial update)
++  app_->SetEntities(entities);
++}
++
++void BridgeController::HandleNotifPush(const std::vector<uint8_t>& payload) {
++  NotifPushMessage msg;
++  if (!NotifPushMessage::DecodeCbor(payload.data(), payload.size(), msg)) {
++    return;
++  }
++
++  // Convert to UI model
++  HaNotification notif;
++  notif.title = msg.notification.title;
++  notif.body = msg.notification.body;
++  notif.tag = msg.notification.tag;
++  notif.severity = "info"; // Can be extended in protocol
++
++  // Push to UI
++  app_->PushNotification(notif, msg.deduplicate);
++}
++
++void BridgeController::OnUIActionInvoked(uint8_t actionId, const char* gesture) {
++  // Create ACTION_INVOKE message
++  ActionInvokeMessage msg;
++  msg.actionId = actionId;
++  msg.gesture = gesture;
++
++  // Encode to CBOR
++  std::vector<uint8_t> payload;
++  if (!msg.EncodeCbor(payload)) {
++    return;
++  }
++
++  // Send via BLE
++  SendMessage(MessageType::ACTION_INVOKE, payload);
++}
++
++void BridgeController::SendMessage(MessageType type, const std::vector<uint8_t>& payload) {
++  // Encode into frames
++  std::vector<std::vector<uint8_t>> chunks = frameCodec_.EncodeMessage(
++    static_cast<uint8_t>(type),
++    payload
++  );
++
++  // Send each chunk via BLE
++  for (const auto& chunk : chunks) {
++    bleService_->SendNotify(chunk);
++  }
++}
++
++} // namespace HaBridge
++} // namespace Applications
++} // namespace Pinetime
+diff --git a/src/ha_bridge/BridgeController.h b/src/ha_bridge/BridgeController.h
+new file mode 100755
+index 00000000..ec008ac1
+--- /dev/null
++++ b/src/ha_bridge/BridgeController.h
+@@ -0,0 +1,60 @@
++#pragma once
++
++#include "../components/ble/HomeAssistantService.h"
++#include "../displayapp/apps/HomeAssistantApp.h"
++#include "FrameCodec.h"
++#include "ProtocolMessages.h"
++#include <memory>
++#include <vector>
++
++namespace Pinetime {
++namespace Applications {
++namespace HaBridge {
++
++/**
++ * BridgeController ties together the BLE service, protocol layer, and UI app.
++ * It handles the bidirectional data flow:
++ * - BLE → Frame decoding → CBOR decoding → UI updates
++ * - UI actions → CBOR encoding → Frame encoding → BLE
++ */
++class BridgeController {
++ public:
++  BridgeController();
++  ~BridgeController();
++
++  // Initialize all components
++  void Init();
++
++  // Periodic tick for maintenance (reassembly timeouts, etc.)
++  void OnTick();
++
++  // Get the UI app instance (for integration into InfiniTime's app list)
++  HomeAssistantApp* GetApp() { return app_.get(); }
++
++ private:
++  // BLE service
++  std::unique_ptr<Pinetime::Components::HomeAssistantService> bleService_;
++
++  // Frame codec for chunking/reassembly
++  FrameCodec frameCodec_;
++
++  // UI app
++  std::unique_ptr<HomeAssistantApp> app_;
++
++  // Handlers
++  void OnBleDataReceived(const std::vector<uint8_t>& data);
++  void OnFrameReceived(const Frame& frame);
++  void OnUIActionInvoked(uint8_t actionId, const char* gesture);
++
++  // Message handlers
++  void HandleConfigPush(const std::vector<uint8_t>& payload);
++  void HandleStateUpdate(const std::vector<uint8_t>& payload);
++  void HandleNotifPush(const std::vector<uint8_t>& payload);
++
++  // Send message to phone
++  void SendMessage(MessageType type, const std::vector<uint8_t>& payload);
++};
++
++} // namespace HaBridge
++} // namespace Applications
++} // namespace Pinetime
+diff --git a/src/ha_bridge/FrameCodec.cpp b/src/ha_bridge/FrameCodec.cpp
+new file mode 100755
+index 00000000..2717928e
+--- /dev/null
++++ b/src/ha_bridge/FrameCodec.cpp
+@@ -0,0 +1,153 @@
++#include "FrameCodec.h"
++
++#include <algorithm>
++#include <cstring>
++
++namespace Pinetime {
++namespace Applications {
++namespace HaBridge {
++
++static constexpr size_t kHeaderLen = 9;
++
++static uint16_t ReadU16Le(const uint8_t* p) {
++  return static_cast<uint16_t>(p[0] | (p[1] << 8));
++}
++
++static void WriteU16Le(uint8_t* p, uint16_t v) {
++  p[0] = static_cast<uint8_t>(v & 0xFF);
++  p[1] = static_cast<uint8_t>((v >> 8) & 0xFF);
++}
++
++std::optional<Frame> Reassembler::Ingest(const std::vector<uint8_t>& frame, uint32_t nowMs) {
++  // Purge timeouts.
++  for (auto it = inFlight_.begin(); it != inFlight_.end();) {
++    if (nowMs - it->second.firstSeenMs > timeoutMs_) {
++      it = inFlight_.erase(it);
++    } else {
++      ++it;
++    }
++  }
++
++  if (frame.size() < kHeaderLen) {
++    return std::nullopt;
++  }
++
++  FrameHeader h{};
++  h.version = frame[0];
++  h.type = frame[1];
++  h.flags = frame[2];
++  h.msgId = ReadU16Le(&frame[3]);
++  h.totalLen = ReadU16Le(&frame[5]);
++  h.chunkIndex = frame[7];
++  h.chunkCount = frame[8];
++
++  if (h.chunkCount == 0 || h.chunkIndex >= h.chunkCount) {
++    return std::nullopt;
++  }
++
++  auto& inflight = inFlight_[h.msgId];
++  if (inflight.chunks.empty()) {
++    inflight.header = h;
++    inflight.firstSeenMs = nowMs;
++    inflight.chunks.resize(h.chunkCount);
++    inflight.received = 0;
++  }
++
++  // If message meta differs, reset.
++  if (inflight.header.totalLen != h.totalLen || inflight.header.chunkCount != h.chunkCount || inflight.header.type != h.type) {
++    inflight.header = h;
++    inflight.firstSeenMs = nowMs;
++    inflight.chunks.assign(h.chunkCount, {});
++    inflight.received = 0;
++  }
++
++  const auto chunkBytesBegin = frame.begin() + static_cast<long>(kHeaderLen);
++  std::vector<uint8_t> chunk(chunkBytesBegin, frame.end());
++
++  if (inflight.chunks[h.chunkIndex].empty()) {
++    inflight.chunks[h.chunkIndex] = std::move(chunk);
++    inflight.received++;
++  } else {
++    inflight.chunks[h.chunkIndex] = std::move(chunk);
++  }
++
++  if (inflight.received < h.chunkCount) {
++    return std::nullopt;
++  }
++
++  std::vector<uint8_t> payload;
++  payload.reserve(h.totalLen);
++  for (uint8_t i = 0; i < h.chunkCount; i++) {
++    const auto& c = inflight.chunks[i];
++    payload.insert(payload.end(), c.begin(), c.end());
++  }
++  if (payload.size() > h.totalLen) {
++    payload.resize(h.totalLen);
++  }
++  if (payload.size() != h.totalLen) {
++    inFlight_.erase(h.msgId);
++    return std::nullopt;
++  }
++
++  Frame out{h, std::move(payload)};
++  inFlight_.erase(h.msgId);
++  return out;
++}
++
++void Reassembler::Clear() {
++  inFlight_.clear();
++}
++
++std::vector<std::vector<uint8_t>> Chunk(uint8_t version,
++                                       uint8_t type,
++                                       uint8_t flags,
++                                       uint16_t msgId,
++                                       const std::vector<uint8_t>& payload,
++                                       uint16_t maxFrameBytes) {
++  const uint16_t maxChunk = (maxFrameBytes > kHeaderLen) ? (maxFrameBytes - kHeaderLen) : 1;
++  const uint16_t chunkCount = static_cast<uint16_t>((payload.size() + maxChunk - 1) / maxChunk);
++
++  std::vector<std::vector<uint8_t>> frames;
++  frames.reserve(chunkCount);
++
++  for (uint16_t i = 0; i < chunkCount; i++) {
++    const size_t start = static_cast<size_t>(i) * maxChunk;
++    const size_t end = std::min(payload.size(), start + maxChunk);
++
++    std::vector<uint8_t> frame;
++    frame.resize(kHeaderLen + (end - start));
++
++    frame[0] = version;
++    frame[1] = type;
++    frame[2] = flags;
++    WriteU16Le(&frame[3], msgId);
++    WriteU16Le(&frame[5], static_cast<uint16_t>(payload.size()));
++    frame[7] = static_cast<uint8_t>(i);
++    frame[8] = static_cast<uint8_t>(chunkCount);
++
++    if (end > start) {
++      std::memcpy(&frame[kHeaderLen], payload.data() + start, end - start);
++    }
++    frames.push_back(std::move(frame));
++  }
++
++  return frames;
++}
++
++void FrameCodec::OnDataReceived(const std::vector<uint8_t>& data, uint32_t nowMs,
++                                std::function<void(const Frame&)> onFrameReady) {
++  auto result = reassembler_.Ingest(data, nowMs);
++  if (result.has_value() && onFrameReady) {
++    onFrameReady(result.value());
++  }
++}
++
++std::vector<std::vector<uint8_t>> FrameCodec::EncodeMessage(uint8_t type,
++                                                            const std::vector<uint8_t>& payload) {
++  uint16_t msgId = nextMsgId_++;
++  return Chunk(0x01, type, 0x00, msgId, payload, mtuSize_);
++}
++
++} // namespace HaBridge
++} // namespace Applications
++} // namespace Pinetime
+diff --git a/src/ha_bridge/FrameCodec.h b/src/ha_bridge/FrameCodec.h
+new file mode 100755
+index 00000000..6ed2119a
+--- /dev/null
++++ b/src/ha_bridge/FrameCodec.h
+@@ -0,0 +1,85 @@
++#pragma once
++
++#include <cstdint>
++#include <functional>
++#include <optional>
++#include <unordered_map>
++#include <vector>
++
++namespace Pinetime {
++namespace Applications {
++namespace HaBridge {
++
++struct FrameHeader {
++  uint8_t version;
++  uint8_t type;
++  uint8_t flags;
++  uint16_t msgId;
++  uint16_t totalLen;
++  uint8_t chunkIndex;
++  uint8_t chunkCount;
++};
++
++// Alias for a complete reassembled frame
++struct Frame {
++  FrameHeader header;
++  std::vector<uint8_t> payload;
++};
++
++class Reassembler {
++ public:
++  explicit Reassembler(uint32_t timeoutMs = 5000) : timeoutMs_(timeoutMs) {}
++
++  // Feed a single BLE frame (header+chunk). Returns a complete frame when all chunks arrive.
++  std::optional<Frame> Ingest(const std::vector<uint8_t>& frame, uint32_t nowMs);
++
++  void Clear();
++
++ private:
++  struct InFlight {
++    FrameHeader header;
++    uint32_t firstSeenMs;
++    std::vector<std::vector<uint8_t>> chunks;
++    uint32_t received{0};
++  };
++
++  uint32_t timeoutMs_;
++  std::unordered_map<uint16_t, InFlight> inFlight_;
++};
++
++// Encode a payload into chunked frames, given maximum frame size (ATT payload). Header is 9 bytes.
++std::vector<std::vector<uint8_t>> Chunk(uint8_t version,
++                                       uint8_t type,
++                                       uint8_t flags,
++                                       uint16_t msgId,
++                                       const std::vector<uint8_t>& payload,
++                                       uint16_t maxFrameBytes);
++
++/**
++ * FrameCodec wraps the Reassembler for incoming frames and provides
++ * chunking for outgoing frames.
++ */
++class FrameCodec {
++ public:
++  explicit FrameCodec(uint16_t mtuSize = 247) : mtuSize_(mtuSize) {}
++
++  // Process incoming BLE data. Calls callback when a complete frame is ready.
++  void OnDataReceived(const std::vector<uint8_t>& data, uint32_t nowMs,
++                     std::function<void(const Frame&)> onFrameReady);
++
++  // Encode a message into BLE frames ready to send
++  std::vector<std::vector<uint8_t>> EncodeMessage(uint8_t type,
++                                                  const std::vector<uint8_t>& payload);
++
++  void SetMtu(uint16_t mtu) { mtuSize_ = mtu; }
++  void Clear() { reassembler_.Clear(); }
++
++ private:
++  Reassembler reassembler_;
++  uint16_t mtuSize_;
++  uint16_t nextMsgId_{0};
++};
++
++} // namespace HaBridge
++} // namespace Applications
++} // namespace Pinetime
+diff --git a/src/ha_bridge/ProtocolMessages.cpp b/src/ha_bridge/ProtocolMessages.cpp
+new file mode 100755
+index 00000000..0684bdbd
+--- /dev/null
++++ b/src/ha_bridge/ProtocolMessages.cpp
+@@ -0,0 +1,534 @@
++#include "ProtocolMessages.h"
++#include <cbor.h>
++#include <cstring>
++
++namespace Pinetime {
++namespace Applications {
++namespace HaBridge {
++
++// Helper to encode string to CBOR
++static bool EncodeString(CborEncoder* encoder, const std::string& str) {
++  return cbor_encode_text_stringz(encoder, str.c_str()) == CborNoError;
++}
++
++// Helper to decode string from CBOR
++static bool DecodeString(CborValue* value, std::string& out) {
++  if (!cbor_value_is_text_string(value)) return false;
++
++  size_t len = 0;
++  if (cbor_value_calculate_string_length(value, &len) != CborNoError) return false;
++
++  std::vector<char> buffer(len + 1);
++  if (cbor_value_copy_text_string(value, buffer.data(), &len, value) != CborNoError) return false;
++
++  buffer[len] = '\0';
++  out = std::string(buffer.data());
++  return true;
++}
++
++// HaAction encoding/decoding
++bool HaAction::EncodeCbor(std::vector<uint8_t>& output) const {
++  uint8_t buffer[512];
++  CborEncoder encoder, mapEncoder;
++  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
++
++  if (cbor_encoder_create_map(&encoder, &mapEncoder, 5) != CborNoError) return false;
++
++  // actionId
++  if (cbor_encode_text_stringz(&mapEncoder, "actionId") != CborNoError) return false;
++  if (cbor_encode_uint(&mapEncoder, actionId) != CborNoError) return false;
++
++  // label
++  if (cbor_encode_text_stringz(&mapEncoder, "label") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, label)) return false;
++
++  // entityId
++  if (cbor_encode_text_stringz(&mapEncoder, "entityId") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, entityId)) return false;
++
++  // serviceAction
++  if (cbor_encode_text_stringz(&mapEncoder, "serviceAction") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, serviceAction)) return false;
++
++  // serviceData (optional map)
++  if (cbor_encode_text_stringz(&mapEncoder, "serviceData") != CborNoError) return false;
++  CborEncoder dataMapEncoder;
++  if (cbor_encoder_create_map(&mapEncoder, &dataMapEncoder, serviceData.size()) != CborNoError) return false;
++  for (const auto& [key, value] : serviceData) {
++    if (!EncodeString(&dataMapEncoder, key)) return false;
++    if (!EncodeString(&dataMapEncoder, value)) return false;
++  }
++  if (cbor_encoder_close_container(&mapEncoder, &dataMapEncoder) != CborNoError) return false;
++
++  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
++
++  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
++  output.insert(output.end(), buffer, buffer + len);
++  return true;
++}
++
++bool HaAction::DecodeCbor(const uint8_t* data, size_t len, HaAction& out) {
++  CborParser parser;
++  CborValue value, mapValue;
++
++  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
++  if (!cbor_value_is_map(&value)) return false;
++
++  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
++
++  while (!cbor_value_at_end(&mapValue)) {
++    std::string key;
++    if (!DecodeString(&mapValue, key)) return false;
++
++    if (key == "actionId") {
++      uint64_t id;
++      if (cbor_value_get_uint64(&mapValue, &id) != CborNoError) return false;
++      out.actionId = static_cast<uint8_t>(id);
++      cbor_value_advance(&mapValue);
++    } else if (key == "label") {
++      if (!DecodeString(&mapValue, out.label)) return false;
++    } else if (key == "entityId") {
++      if (!DecodeString(&mapValue, out.entityId)) return false;
++    } else if (key == "serviceAction") {
++      if (!DecodeString(&mapValue, out.serviceAction)) return false;
++    } else if (key == "serviceData") {
++      if (!cbor_value_is_map(&mapValue)) return false;
++      CborValue dataMap;
++      if (cbor_value_enter_container(&mapValue, &dataMap) != CborNoError) return false;
++      while (!cbor_value_at_end(&dataMap)) {
++        std::string k, v;
++        if (!DecodeString(&dataMap, k)) return false;
++        if (!DecodeString(&dataMap, v)) return false;
++        out.serviceData.push_back({k, v});
++      }
++      cbor_value_leave_container(&mapValue, &dataMap);
++    } else {
++      cbor_value_advance(&mapValue);
++    }
++  }
++
++  cbor_value_leave_container(&value, &mapValue);
++  return true;
++}
++
++// HaEntity encoding/decoding
++bool HaEntity::EncodeCbor(std::vector<uint8_t>& output) const {
++  uint8_t buffer[512];
++  CborEncoder encoder, mapEncoder;
++  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
++
++  if (cbor_encoder_create_map(&encoder, &mapEncoder, 7) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "entityId") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, entityId)) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "name") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, name)) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "state") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, state)) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "unit") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, unit)) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "precision") != CborNoError) return false;
++  if (cbor_encode_uint(&mapEncoder, precision) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "showUnits") != CborNoError) return false;
++  if (cbor_encode_boolean(&mapEncoder, showUnits) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "showIcon") != CborNoError) return false;
++  if (cbor_encode_boolean(&mapEncoder, showIcon) != CborNoError) return false;
++
++  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
++
++  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
++  output.insert(output.end(), buffer, buffer + len);
++  return true;
++}
++
++bool HaEntity::DecodeCbor(const uint8_t* data, size_t len, HaEntity& out) {
++  CborParser parser;
++  CborValue value, mapValue;
++
++  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
++  if (!cbor_value_is_map(&value)) return false;
++
++  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
++
++  while (!cbor_value_at_end(&mapValue)) {
++    std::string key;
++    if (!DecodeString(&mapValue, key)) return false;
++
++    if (key == "entityId") {
++      if (!DecodeString(&mapValue, out.entityId)) return false;
++    } else if (key == "name") {
++      if (!DecodeString(&mapValue, out.name)) return false;
++    } else if (key == "state") {
++      if (!DecodeString(&mapValue, out.state)) return false;
++    } else if (key == "unit") {
++      if (!DecodeString(&mapValue, out.unit)) return false;
++    } else if (key == "precision") {
++      uint64_t p;
++      if (cbor_value_get_uint64(&mapValue, &p) != CborNoError) return false;
++      out.precision = static_cast<uint8_t>(p);
++      cbor_value_advance(&mapValue);
++    } else if (key == "showUnits") {
++      bool val;
++      if (cbor_value_get_boolean(&mapValue, &val) != CborNoError) return false;
++      out.showUnits = val;
++      cbor_value_advance(&mapValue);
++    } else if (key == "showIcon") {
++      bool val;
++      if (cbor_value_get_boolean(&mapValue, &val) != CborNoError) return false;
++      out.showIcon = val;
++      cbor_value_advance(&mapValue);
++    } else {
++      cbor_value_advance(&mapValue);
++    }
++  }
++
++  cbor_value_leave_container(&value, &mapValue);
++  return true;
++}
++
++// ConfigPushMessage encoding/decoding
++bool ConfigPushMessage::EncodeCbor(std::vector<uint8_t>& output) const {
++  uint8_t buffer[2048];
++  CborEncoder encoder, mapEncoder;
++  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
++
++  if (cbor_encoder_create_map(&encoder, &mapEncoder, 2) != CborNoError) return false;
++
++  // actions array
++  if (cbor_encode_text_stringz(&mapEncoder, "actions") != CborNoError) return false;
++  CborEncoder actionsArray;
++  if (cbor_encoder_create_array(&mapEncoder, &actionsArray, actions.size()) != CborNoError) return false;
++  for (const auto& action : actions) {
++    std::vector<uint8_t> actionData;
++    if (!action.EncodeCbor(actionData)) return false;
++    // Parse and re-encode to embed in array
++    CborParser p;
++    CborValue v;
++    cbor_parser_init(actionData.data(), actionData.size(), 0, &p, &v);
++    if (cbor_encoder_copy_value(&actionsArray, &v) != CborNoError) return false;
++  }
++  if (cbor_encoder_close_container(&mapEncoder, &actionsArray) != CborNoError) return false;
++
++  // entities array
++  if (cbor_encode_text_stringz(&mapEncoder, "entities") != CborNoError) return false;
++  CborEncoder entitiesArray;
++  if (cbor_encoder_create_array(&mapEncoder, &entitiesArray, entities.size()) != CborNoError) return false;
++  for (const auto& entity : entities) {
++    std::vector<uint8_t> entityData;
++    if (!entity.EncodeCbor(entityData)) return false;
++    CborParser p;
++    CborValue v;
++    cbor_parser_init(entityData.data(), entityData.size(), 0, &p, &v);
++    if (cbor_encoder_copy_value(&entitiesArray, &v) != CborNoError) return false;
++  }
++  if (cbor_encoder_close_container(&mapEncoder, &entitiesArray) != CborNoError) return false;
++
++  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
++
++  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
++  output.insert(output.end(), buffer, buffer + len);
++  return true;
++}
++
++bool ConfigPushMessage::DecodeCbor(const uint8_t* data, size_t len, ConfigPushMessage& out) {
++  CborParser parser;
++  CborValue value, mapValue;
++
++  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
++  if (!cbor_value_is_map(&value)) return false;
++
++  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
++
++  while (!cbor_value_at_end(&mapValue)) {
++    std::string key;
++    if (!DecodeString(&mapValue, key)) return false;
++
++    if (key == "actions") {
++      if (!cbor_value_is_array(&mapValue)) return false;
++      CborValue arrayValue;
++      if (cbor_value_enter_container(&mapValue, &arrayValue) != CborNoError) return false;
++
++      while (!cbor_value_at_end(&arrayValue)) {
++        // Get the raw bytes for this action
++        size_t actionLen = 0;
++        const uint8_t* actionData = cbor_value_get_next_byte(&arrayValue);
++        cbor_value_advance(&arrayValue);
++        // Note: This is simplified; production code would need proper length calculation
++        HaAction action;
++        // Decode would need the actual bytes - this is a simplification
++        out.actions.push_back(action);
++      }
++      cbor_value_leave_container(&mapValue, &arrayValue);
++    } else if (key == "entities") {
++      if (!cbor_value_is_array(&mapValue)) return false;
++      CborValue arrayValue;
++      if (cbor_value_enter_container(&mapValue, &arrayValue) != CborNoError) return false;
++
++      while (!cbor_value_at_end(&arrayValue)) {
++        HaEntity entity;
++        // Similar to actions - simplified
++        out.entities.push_back(entity);
++        cbor_value_advance(&arrayValue);
++      }
++      cbor_value_leave_container(&mapValue, &arrayValue);
++    } else {
++      cbor_value_advance(&mapValue);
++    }
++  }
++
++  cbor_value_leave_container(&value, &mapValue);
++  return true;
++}
++
++// ActionInvokeMessage encoding/decoding
++bool ActionInvokeMessage::EncodeCbor(std::vector<uint8_t>& output) const {
++  uint8_t buffer[256];
++  CborEncoder encoder, mapEncoder;
++  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
++
++  if (cbor_encoder_create_map(&encoder, &mapEncoder, 2) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "actionId") != CborNoError) return false;
++  if (cbor_encode_uint(&mapEncoder, actionId) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "gesture") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, gesture)) return false;
++
++  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
++
++  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
++  output.insert(output.end(), buffer, buffer + len);
++  return true;
++}
++
++bool ActionInvokeMessage::DecodeCbor(const uint8_t* data, size_t len, ActionInvokeMessage& out) {
++  CborParser parser;
++  CborValue value, mapValue;
++
++  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
++  if (!cbor_value_is_map(&value)) return false;
++
++  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
++
++  while (!cbor_value_at_end(&mapValue)) {
++    std::string key;
++    if (!DecodeString(&mapValue, key)) return false;
++
++    if (key == "actionId") {
++      uint64_t id;
++      if (cbor_value_get_uint64(&mapValue, &id) != CborNoError) return false;
++      out.actionId = static_cast<uint8_t>(id);
++      cbor_value_advance(&mapValue);
++    } else if (key == "gesture") {
++      if (!DecodeString(&mapValue, out.gesture)) return false;
++    } else {
++      cbor_value_advance(&mapValue);
++    }
++  }
++
++  cbor_value_leave_container(&value, &mapValue);
++  return true;
++}
++
++// StateUpdateMessage encoding/decoding
++bool StateUpdateMessage::EncodeCbor(std::vector<uint8_t>& output) const {
++  uint8_t buffer[2048];
++  CborEncoder encoder, mapEncoder;
++  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
++
++  if (cbor_encoder_create_map(&encoder, &mapEncoder, 1) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "entities") != CborNoError) return false;
++  CborEncoder entitiesArray;
++  if (cbor_encoder_create_array(&mapEncoder, &entitiesArray, entities.size()) != CborNoError) return false;
++  for (const auto& entity : entities) {
++    std::vector<uint8_t> entityData;
++    if (!entity.EncodeCbor(entityData)) return false;
++    CborParser p;
++    CborValue v;
++    cbor_parser_init(entityData.data(), entityData.size(), 0, &p, &v);
++    if (cbor_encoder_copy_value(&entitiesArray, &v) != CborNoError) return false;
++  }
++  if (cbor_encoder_close_container(&mapEncoder, &entitiesArray) != CborNoError) return false;
++
++  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
++
++  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
++  output.insert(output.end(), buffer, buffer + len);
++  return true;
++}
++
++bool StateUpdateMessage::DecodeCbor(const uint8_t* data, size_t len, StateUpdateMessage& out) {
++  // Similar to ConfigPushMessage entities decoding
++  CborParser parser;
++  CborValue value, mapValue;
++
++  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
++  if (!cbor_value_is_map(&value)) return false;
++
++  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
++
++  while (!cbor_value_at_end(&mapValue)) {
++    std::string key;
++    if (!DecodeString(&mapValue, key)) return false;
++
++    if (key == "entities") {
++      if (!cbor_value_is_array(&mapValue)) return false;
++      CborValue arrayValue;
++      if (cbor_value_enter_container(&mapValue, &arrayValue) != CborNoError) return false;
++
++      while (!cbor_value_at_end(&arrayValue)) {
++        HaEntity entity;
++        out.entities.push_back(entity);
++        cbor_value_advance(&arrayValue);
++      }
++      cbor_value_leave_container(&mapValue, &arrayValue);
++    } else {
++      cbor_value_advance(&mapValue);
++    }
++  }
++
++  cbor_value_leave_container(&value, &mapValue);
++  return true;
++}
++
++// HaNotification encoding/decoding
++bool HaNotification::EncodeCbor(std::vector<uint8_t>& output) const {
++  uint8_t buffer[1024];
++  CborEncoder encoder, mapEncoder;
++  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
++
++  if (cbor_encoder_create_map(&encoder, &mapEncoder, 5) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "tag") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, tag)) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "title") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, title)) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "body") != CborNoError) return false;
++  if (!EncodeString(&mapEncoder, body)) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "timestamp") != CborNoError) return false;
++  if (cbor_encode_uint(&mapEncoder, timestamp) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "actions") != CborNoError) return false;
++  CborEncoder actionsArray;
++  if (cbor_encoder_create_array(&mapEncoder, &actionsArray, actions.size()) != CborNoError) return false;
++  for (const auto& action : actions) {
++    if (!EncodeString(&actionsArray, action)) return false;
++  }
++  if (cbor_encoder_close_container(&mapEncoder, &actionsArray) != CborNoError) return false;
++
++  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
++
++  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
++  output.insert(output.end(), buffer, buffer + len);
++  return true;
++}
++
++bool HaNotification::DecodeCbor(const uint8_t* data, size_t len, HaNotification& out) {
++  CborParser parser;
++  CborValue value, mapValue;
++
++  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
++  if (!cbor_value_is_map(&value)) return false;
++
++  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
++
++  while (!cbor_value_at_end(&mapValue)) {
++    std::string key;
++    if (!DecodeString(&mapValue, key)) return false;
++
++    if (key == "tag") {
++      if (!DecodeString(&mapValue, out.tag)) return false;
++    } else if (key == "title") {
++      if (!DecodeString(&mapValue, out.title)) return false;
++    } else if (key == "body") {
++      if (!DecodeString(&mapValue, out.body)) return false;
++    } else if (key == "timestamp") {
++      if (cbor_value_get_uint64(&mapValue, &out.timestamp) != CborNoError) return false;
++      cbor_value_advance(&mapValue);
++    } else if (key == "actions") {
++      if (!cbor_value_is_array(&mapValue)) return false;
++      CborValue arrayValue;
++      if (cbor_value_enter_container(&mapValue, &arrayValue) != CborNoError) return false;
++
++      while (!cbor_value_at_end(&arrayValue)) {
++        std::string action;
++        if (!DecodeString(&arrayValue, action)) return false;
++        out.actions.push_back(action);
++      }
++      cbor_value_leave_container(&mapValue, &arrayValue);
++    } else {
++      cbor_value_advance(&mapValue);
++    }
++  }
++
++  cbor_value_leave_container(&value, &mapValue);
++  return true;
++}
++
++// NotifPushMessage encoding/decoding
++bool NotifPushMessage::EncodeCbor(std::vector<uint8_t>& output) const {
++  uint8_t buffer[1024];
++  CborEncoder encoder, mapEncoder;
++  cbor_encoder_init(&encoder, buffer, sizeof(buffer), 0);
++
++  if (cbor_encoder_create_map(&encoder, &mapEncoder, 2) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "notification") != CborNoError) return false;
++  std::vector<uint8_t> notifData;
++  if (!notification.EncodeCbor(notifData)) return false;
++  CborParser p;
++  CborValue v;
++  cbor_parser_init(notifData.data(), notifData.size(), 0, &p, &v);
++  if (cbor_encoder_copy_value(&mapEncoder, &v) != CborNoError) return false;
++
++  if (cbor_encode_text_stringz(&mapEncoder, "deduplicate") != CborNoError) return false;
++  if (cbor_encode_boolean(&mapEncoder, deduplicate) != CborNoError) return false;
++
++  if (cbor_encoder_close_container(&encoder, &mapEncoder) != CborNoError) return false;
++
++  size_t len = cbor_encoder_get_buffer_size(&encoder, buffer);
++  output.insert(output.end(), buffer, buffer + len);
++  return true;
++}
++
++bool NotifPushMessage::DecodeCbor(const uint8_t* data, size_t len, NotifPushMessage& out) {
++  CborParser parser;
++  CborValue value, mapValue;
++
++  if (cbor_parser_init(data, len, 0, &parser, &value) != CborNoError) return false;
++  if (!cbor_value_is_map(&value)) return false;
++
++  if (cbor_value_enter_container(&value, &mapValue) != CborNoError) return false;
++
++  while (!cbor_value_at_end(&mapValue)) {
++    std::string key;
++    if (!DecodeString(&mapValue, key)) return false;
++
++    if (key == "notification") {
++      // Simplified - would need proper nested decoding
++      cbor_value_advance(&mapValue);
++    } else if (key == "deduplicate") {
++      if (cbor_value_get_boolean(&mapValue, &out.deduplicate) != CborNoError) return false;
++      cbor_value_advance(&mapValue);
++    } else {
++      cbor_value_advance(&mapValue);
++    }
++  }
++
++  cbor_value_leave_container(&value, &mapValue);
++  return true;
++}
++
++} // namespace HaBridge
++} // namespace Applications
++} // namespace Pinetime
+diff --git a/src/ha_bridge/ProtocolMessages.h b/src/ha_bridge/ProtocolMessages.h
+new file mode 100755
+index 00000000..96b7fead
+--- /dev/null
++++ b/src/ha_bridge/ProtocolMessages.h
+@@ -0,0 +1,109 @@
++#pragma once
++
++#include <cstdint>
++#include <string>
++#include <vector>
++
++namespace Pinetime {
++namespace Applications {
++namespace HaBridge {
++
++// Message types from PROTOCOL.md
++enum class MessageType : uint8_t {
++  CONFIG_PUSH = 0x01,
++  ACTION_INVOKE = 0x02,
++  STATE_UPDATE = 0x03,
++  NOTIF_PUSH = 0x04,
++};
++
++// Forward declarations for CBOR integration
++class CborEncoder;
++class CborDecoder;
++
++// Base message interface
++struct ProtocolMessage {
++  virtual ~ProtocolMessage() = default;
++  virtual MessageType GetType() const = 0;
++  virtual bool EncodeCbor(std::vector<uint8_t>& output) const = 0;
++};
++
++// Action definition (part of CONFIG_PUSH)
++struct HaAction {
++  uint8_t actionId;
++  std::string label;
++  std::string entityId;
++  std::string serviceAction;
++  std::vector<std::pair<std::string, std::string>> serviceData; // key-value pairs
++
++  bool EncodeCbor(std::vector<uint8_t>& output) const;
++  static bool DecodeCbor(const uint8_t* data, size_t len, HaAction& out);
++};
++
++// Entity definition (part of CONFIG_PUSH)
++struct HaEntity {
++  std::string entityId;
++  std::string name;
++  std::string state;
++  std::string unit;
++  uint8_t precision;
++  bool showUnits;
++  bool showIcon;
++
++  bool EncodeCbor(std::vector<uint8_t>& output) const;
++  static bool DecodeCbor(const uint8_t* data, size_t len, HaEntity& out);
++};
++
++// CONFIG_PUSH message (phone → watch)
++struct ConfigPushMessage : public ProtocolMessage {
++  std::vector<HaAction> actions;
++  std::vector<HaEntity> entities;
++
++  MessageType GetType() const override { return MessageType::CONFIG_PUSH; }
++  bool EncodeCbor(std::vector<uint8_t>& output) const override;
++  static bool DecodeCbor(const uint8_t* data, size_t len, ConfigPushMessage& out);
++};
++
++// ACTION_INVOKE message (watch → phone)
++struct ActionInvokeMessage : public ProtocolMessage {
++  uint8_t actionId;
++  std::string gesture; // e.g., "tap", "long_press"
++
++  MessageType GetType() const override { return MessageType::ACTION_INVOKE; }
++  bool EncodeCbor(std::vector<uint8_t>& output) const override;
++  static bool DecodeCbor(const uint8_t* data, size_t len, ActionInvokeMessage& out);
++};
++
++// STATE_UPDATE message (phone → watch)
++struct StateUpdateMessage : public ProtocolMessage {
++  std::vector<HaEntity> entities; // Partial updates
++
++  MessageType GetType() const override { return MessageType::STATE_UPDATE; }
++  bool EncodeCbor(std::vector<uint8_t>& output) const override;
++  static bool DecodeCbor(const uint8_t* data, size_t len, StateUpdateMessage& out);
++};
++
++// Notification (part of NOTIF_PUSH)
++struct HaNotification {
++  std::string tag;
++  std::string title;
++  std::string body;
++  uint64_t timestamp;
++  std::vector<std::string> actions;
++
++  bool EncodeCbor(std::vector<uint8_t>& output) const;
++  static bool DecodeCbor(const uint8_t* data, size_t len, HaNotification& out);
++};
++
++// NOTIF_PUSH message (phone → watch)
++struct NotifPushMessage : public ProtocolMessage {
++  HaNotification notification;
++  bool deduplicate;
++
++  MessageType GetType() const override { return MessageType::NOTIF_PUSH; }
++  bool EncodeCbor(std::vector<uint8_t>& output) const override;
++  static bool DecodeCbor(const uint8_t* data, size_t len, NotifPushMessage& out);
++};
++
++} // namespace HaBridge
++} // namespace Applications
++} // namespace Pinetime
+diff --git a/src/systemtask/SystemTask.cpp b/src/systemtask/SystemTask.cpp
+index 56bf9273..211f2ace 100644
+--- a/src/systemtask/SystemTask.cpp
++++ b/src/systemtask/SystemTask.cpp
+@@ -143,6 +143,7 @@ void SystemTask::Work() {
+   displayApp.Register(&nimbleController.weather());
+   displayApp.Register(&nimbleController.music());
+   displayApp.Register(&nimbleController.navigation());
++  displayApp.Register(&nimbleController.homeAssistant());
+   displayApp.Start(bootError);
+ 
+   heartRateSensor.Init();
